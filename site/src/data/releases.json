@@ -16,13 +16,13 @@
       "assets": {
         "setup": {
           "name": "Lumen-0.1.0-setup.exe",
-          "size": 115801660,
-          "sha256": "dea5d8c2a4c75a2c66581ac6843fe44e8782016572e4f237a480f0bc25b71b93"
+          "size": 115783096,
+          "sha256": "62e2aa1c329a24977874cfc90710017b523c8967ba40467812ecef78943b72bf"
         },
         "portable": {
           "name": "Lumen-0.1.0-portable.zip",
-          "size": 159639603,
-          "sha256": "79ff77d0920ee325278dd0e6fd075c895c32ef97a890da0378257ad4a9c23ffc"
+          "size": 159618809,
+          "sha256": "a50471c7cd9604d8bfbee3283b4b93dc1843b95a5b3d7c8e158bd0efecfc793d"
         }
       }
     }
