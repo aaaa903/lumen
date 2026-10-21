@@ -8,7 +8,7 @@ Lumen：本地优先的阅读、标注与知识库桌面应用（Windows，Elect
 
 无账号、无云端、零网络请求。产品边界见 [PRD.md](./PRD.md)，实现细节见 [TECH_DESIGN.md](./TECH_DESIGN.md)。
 
-当前状态：**M4（0.1.0）实现与本地验收完成，待推送 `v0.1.0` 标签**——导入 EPUB / Markdown / TXT、书架、epub.js 分页、目录、进度续读、排版与配色、高亮批注书签、侧栏、重锚、跨书全文搜索、标签、独立笔记、导出 Markdown、打包配置与官网均可用。`desktop-dist/` 已有 `Lumen-0.1.0-setup.exe` 与 `Lumen-0.1.0-portable.zip`，`site/src/data/releases.json` 的资产大小与 SHA-256 已回填。推送标签后由 Actions 重新构建、创建 Release 并部署官网。动手前先看 `docs/IMPLEMENTATION_PROMPT.md` 的里程碑顺序；V1（0.2.0，PDF 等）尚未开始。
+当前状态：**M4 已发布（`0.1.0`，2026-10-21）**——导入 EPUB / Markdown / TXT、书架、epub.js 分页、目录、进度续读、排版与配色、高亮批注书签、侧栏、重锚、跨书全文搜索、标签、独立笔记、导出 Markdown、打包与官网均可用。仓库 https://github.com/aaaa903/lumen ，Release v0.1.0 提供 setup 与 portable，官网 https://aaaa903.github.io/lumen/ 。推送 `v*` 标签即走完整发布流水线。动手前先看 `docs/IMPLEMENTATION_PROMPT.md` 的里程碑顺序；V1（0.2.0，PDF 等）尚未开始。
 
 ## 命令
 
@@ -20,7 +20,7 @@ npm test           # Vitest 单测
 npm run build      # 主进程 / 预加载 / 渲染层三份产物
 npm run pack:dir   # 未压缩目录，本机排查用
 npm run pack:portable  # 只打 portable.zip（智能应用控制会拦截 NSIS 中间步骤）
-npm run pack       # NSIS 安装包 + portable.zip → desktop-dist/
+npm run pack       # NSIS 安装包 + portable.zip → desktop-dist/（先生成图标，禁用 electron-builder 自带发布）
 npm run release:assets # 回填产物大小与 SHA-256 到 site/src/data/releases.json
 npm run release:notes  # 由 releases.json 生成 Release 说明
 npm run site:build # 生成官网到 site/dist/
@@ -149,6 +149,9 @@ node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字�
 | 打包报 `spawn UNKNOWN`（NSIS 阶段） | 本机智能应用控制拦截了 electron-builder 用于导出卸载器的临时 exe：改用 `npm run pack:portable`，正式安装包交给 CI |
 | 官网下载按钮 404 | `site/site.config.json` 的 `owner` 是否填对；CI 用 `GITHUB_REPOSITORY` 覆盖。Release 资产名必须与 `releases.json` 一致 |
 | 官网构建报「资产信息不完整」 | `releases.json` 缺少 `size` / `sha256`：先跑 `npm run release:assets`，或等发布工作流回填 |
+| 发布流水线打包步报 `GitHub Personal Access Token is not set` | electron-builder 在 tag 构建时尝试自行发布：`pack`/`pack:portable` 的 `--publish never` 不能删，Release 由 `action-gh-release` 创建 |
+| Pages 部署报 `Tag "v..." is not allowed to deploy to github-pages` | 仓库 Settings → Environments → github-pages 的部署分支策略只允许了 `main`：加一条 `v*`（tag）策略，或调 API `deployment-branch-policies` |
+| 官网校验和与下载到的文件不一致 | `site/src/data/releases.json` 是本地构建的值：等发布工作流把 CI 构建的哈希回写到 `main`（提交信息 `chore: 回填 v* 资产信息`），再部署官网 |
 | Smart App Control 拦截 `setup.exe` | 未签名；改用 `Lumen-<version>-portable.zip`。不要为此关闭 Smart App Control |
 | 网络日志出现外部请求 | 立即定位来源，补进白名单以外的拦截测试；不允许以「只是开发期」为由放行 |
 

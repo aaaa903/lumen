@@ -4,7 +4,7 @@
 
 没有账号，没有云端，没有任何网络请求。书、标注、笔记都存在你自己的机器上。
 
-> 状态：v0.1.0（M4 首次公开发布）。MVP 完整：导入、阅读、标注、知识库、打包与官网都已就绪；安装包与官网部署由推送 `v0.1.0` 标签后的 CI 完成。
+> 状态：v0.1.0（M4 首次公开发布，2026-10-21）。官网 <https://aaaa903.github.io/lumen/>，安装包与免安装包见 [Release v0.1.0](https://github.com/aaaa903/lumen/releases/tag/v0.1.0)。
 
 ## 版本号
 
@@ -104,7 +104,7 @@ npm run release:notes  # 用同一份数据生成 Release 说明
 
 `site/` 是零依赖静态站，由 `site/build.mjs` 读 `site/site.config.json` 与 `site/src/data/releases.json` 直接生成 HTML/CSS。没有前端框架、没有外部字体、没有统计脚本，下载按钮直接指向 GitHub Release 资产。
 
-部署到 GitHub Pages 需要一次性设置：仓库 Settings → Pages → Source 选「GitHub Actions」。`site/site.config.json` 的 `owner` 填 GitHub 用户名；CI 会用 `GITHUB_REPOSITORY` 覆盖，本地预览也可以直接改这一项。
+部署到 GitHub Pages 的一次性设置已完成：仓库 Settings → Pages → Source 选「GitHub Actions」，环境 `github-pages` 的部署策略同时允许 `main` 与 `v*` 标签。`site/site.config.json` 的 `owner` 已填 `aaaa903`；CI 会用 `GITHUB_REPOSITORY` 覆盖，本地预览直接读这一项。
 
 ## 数据位置
 

@@ -1,7 +1,7 @@
 # Lumen 技术设计
 
-版本：0.6（M4 已实现并完成本地打包验收，待推送 v0.1.0）
-对应 PRD：0.6
+版本：0.7（M4 已发布：v0.1.0 Release 与官网均上线）
+对应 PRD：0.7
 最后更新：2026-10-21
 
 本文描述**现状与下一步**。代码与本文冲突时，以代码为准并立即修正本文，不留「待更新」。
@@ -550,6 +550,10 @@ git tag v* → .github/workflows/release.yml（windows-latest）
 
 - `site/src/data/releases.json` 是官网唯一数据源：首页、下载页、更新日志都从它读版本、大小与校验和；`site/build.mjs` 在 `CI` 环境下发现最新版本缺少 `size` 或 `sha256` 会以非零码退出，避免发布半成品站点。
 - 下载地址不写死在 JSON 里：构建时用 `GITHUB_REPOSITORY`（本地回落到 `site/site.config.json` 的 `owner`/`repo`）拼出 `releases/download/<tag>/<name>`。
+- 打包脚本带 `--publish never`：发布只由 `softprops/action-gh-release` 完成。若省略，tag 构建时 electron-builder 会尝试自己发布并要求 `GH_TOKEN`，整步以「GitHub Personal Access Token is not set」失败。
+- `npm run pack` 先执行 `npm run icon`：CI 没有 `build/` 目录，不生成图标会静默退回默认 Electron 图标。
+- Release 创建后，流水线把回填过的 `site/src/data/releases.json` 提交回 `main`（提交信息 `chore: 回填 v* 资产信息`）。否则之后单独部署官网会显示上一份校验和，与线上资产不一致（本地构建与 CI 构建的哈希必然不同）。
+- Pages 环境 `github-pages` 的部署分支策略必须同时允许 `main` 与 `v*` 标签；只允许分支时，tag 触发的部署会被「Tag ... is not allowed to deploy to github-pages due to environment protection rules」拒绝。
 - 只改官网时由 `.github/workflows/site.yml` 在 `main` 分支的 `site/**` 变更上单独构建并部署，不必打标签。
 - 仓库一次性设置：Settings → Pages → Source 选「GitHub Actions」。
 - 开发期里程碑（`0.0.x`）只打 tag，不创建 Release；`0.1.0` 起才发布。
