@@ -2,6 +2,7 @@ import { app, shell } from 'electron'
 import type { AppVersions } from '../../shared/types'
 import { getSchemaVersion, type Db } from '../db/open'
 import { registerBookIpc } from './books'
+import { registerAnnotationIpc } from './annotations'
 import { fail, handle, ok } from './handle'
 import { registerProgressIpc } from './progress'
 
@@ -27,4 +28,5 @@ export function registerIpc(db: Db): void {
 
   registerBookIpc(db)
   registerProgressIpc(db)
+  registerAnnotationIpc(db)
 }

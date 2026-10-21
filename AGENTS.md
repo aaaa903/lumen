@@ -8,7 +8,7 @@ Lumen：本地优先的阅读、标注与知识库桌面应用（Windows，Elect
 
 无账号、无云端、零网络请求。产品边界见 [PRD.md](./PRD.md)，实现细节见 [TECH_DESIGN.md](./TECH_DESIGN.md)。
 
-当前状态：**M1（0.0.2）已完成并提交**——导入 EPUB / Markdown / TXT、书架、epub.js 分页、目录、进度续读、排版与配色可用；M2 标注正在实现。动手前先看 `docs/IMPLEMENTATION_PROMPT.md` 的里程碑顺序。
+当前状态：**M2（0.0.3）已完成**——导入 EPUB / Markdown / TXT、书架、epub.js 分页、目录、进度续读、排版与配色、高亮批注书签、侧栏、重锚可用；M3 知识库正在实现。动手前先看 `docs/IMPLEMENTATION_PROMPT.md` 的里程碑顺序。
 
 ## 命令
 

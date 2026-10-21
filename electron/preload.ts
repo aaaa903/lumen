@@ -15,6 +15,11 @@ const api: LumenApi = {
   touchBook: (id) => ipcRenderer.invoke('books:touch', { id }),
   getProgress: (bookId) => ipcRenderer.invoke('progress:get', { bookId }),
   saveProgress: (input) => ipcRenderer.invoke('progress:save', input),
+  listAnnotations: (bookId) => ipcRenderer.invoke('annotations:list', { bookId }),
+  createAnnotation: (input) => ipcRenderer.invoke('annotations:create', input),
+  updateAnnotation: (input) => ipcRenderer.invoke('annotations:update', input),
+  deleteAnnotation: (id) => ipcRenderer.invoke('annotations:delete', { id }),
+  restoreAnnotation: (id) => ipcRenderer.invoke('annotations:restore', { id }),
   // 拖放进来的 File 不在渲染层持有真实路径，必须由 preload 的 webUtils 取。
   pathForFile: (file) => {
     try {

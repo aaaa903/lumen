@@ -1,7 +1,7 @@
 # Lumen 技术设计
 
-版本：0.2（M1 已实现，M2 进行中）
-对应 PRD：0.1
+版本：0.3（M2 已实现，M3 进行中）
+对应 PRD：0.3
 最后更新：2026-10-21
 
 本文描述**现状与下一步**。代码与本文冲突时，以代码为准并立即修正本文，不留「待更新」。
@@ -30,7 +30,7 @@
 | EPUB | `epub.js` | 0.3.x |
 | 打包 | `electron-builder` | NSIS + portable |
 | Markdown | `markdown-it` | 只做渲染，不做编辑；TXT / Markdown 转换也用它 |
-| 批注编辑 | Markdown 文本域 + 实时预览（CodeMirror 6 在 M2 评估） | 先保证编辑与预览可用，再决定是否引入编辑器依赖 |
+| 批注编辑 | Markdown 文本域 + 编辑／预览切换 | M2 未引入 CodeMirror，保持零额外依赖；需要语法高亮时再评估 |
 | 测试 | Vitest | 纯逻辑单测，不做 E2E |
 
 ### 2.1 新增依赖的理由
@@ -513,7 +513,7 @@ git tag v0.1.0 → GitHub Actions
 
 | 常量 | 值 | 位置 |
 | --- | --- | --- |
-| 应用版本 | `0.0.2`（M1 导入与阅读），版本节奏见 PRD §1.2 | `package.json` |
+| 应用版本 | `0.0.3`（M2 标注），版本节奏见 PRD §1.2 | `package.json` |
 | 数据库 schema 版本 | `1` | `PRAGMA user_version` |
 | 单文件导入上限 | 200 MB | `electron/library/import.ts` |
 | 内存 EPUB 缓存数量 | 3 | `src/lib/convert/text-epub.ts` |

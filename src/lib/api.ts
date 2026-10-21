@@ -1,9 +1,15 @@
 import type {
+  Annotation,
+  AnnotationColor,
+  AnnotationKind,
+  AnnotationLocator,
   AppVersions,
+  CreateAnnotationInput,
   ImportResult,
   LumenApi,
   Progress,
   ShelfBook,
+  UpdateAnnotationInput,
 } from '../../shared/types'
 
 const bridge = (): LumenApi => {
@@ -30,7 +36,23 @@ export const api: LumenApi = {
   touchBook: (id) => bridge().touchBook(id),
   getProgress: (bookId) => bridge().getProgress(bookId),
   saveProgress: (input) => bridge().saveProgress(input),
+  listAnnotations: (bookId) => bridge().listAnnotations(bookId),
+  createAnnotation: (input) => bridge().createAnnotation(input),
+  updateAnnotation: (input) => bridge().updateAnnotation(input),
+  deleteAnnotation: (id) => bridge().deleteAnnotation(id),
+  restoreAnnotation: (id) => bridge().restoreAnnotation(id),
   pathForFile: (file) => bridge().pathForFile(file),
 }
 
-export type { AppVersions, ImportResult, Progress, ShelfBook }
+export type {
+  Annotation,
+  AnnotationColor,
+  AnnotationKind,
+  AnnotationLocator,
+  AppVersions,
+  CreateAnnotationInput,
+  ImportResult,
+  Progress,
+  ShelfBook,
+  UpdateAnnotationInput,
+}

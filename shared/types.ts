@@ -77,6 +77,50 @@ export type Progress = {
   updatedAt: number
 }
 
+/** 标注必须带原文片段；书签的 quote 为空串。 */
+export type AnnotationLocator = Locator & {
+  quote: string
+  prefix: string
+  suffix: string
+}
+
+export type AnnotationKind = 'highlight' | 'note' | 'bookmark'
+
+export type AnnotationColor = 'yellow' | 'green' | 'blue' | 'pink' | 'slate'
+
+export type Annotation = {
+  id: string
+  bookId: string
+  /** 跨段落高亮共用；单段标注为 null。 */
+  groupId: string | null
+  kind: AnnotationKind
+  color: AnnotationColor
+  locator: AnnotationLocator
+  noteMd: string
+  /** 1 = CFI 与原文都对不上，只保留 quote 供用户手动处理。 */
+  orphaned: number
+  createdAt: number
+  updatedAt: number
+  deletedAt: number | null
+}
+
+export type CreateAnnotationInput = {
+  bookId: string
+  kind: AnnotationKind
+  color: AnnotationColor
+  locator: AnnotationLocator
+  noteMd: string
+  groupId: string | null
+}
+
+export type UpdateAnnotationInput = {
+  id: string
+  color?: AnnotationColor
+  noteMd?: string
+  locator?: AnnotationLocator
+  orphaned?: boolean
+}
+
 export type ImportResult =
   | { status: 'ok'; book: ShelfBook }
   | { status: 'duplicate'; bookId: string; title: string }
@@ -101,5 +145,10 @@ export type LumenApi = {
     percent: number
     chapter: string
   }) => Promise<IpcResult<null>>
+  listAnnotations: (bookId: string) => Promise<IpcResult<Annotation[]>>
+  createAnnotation: (input: CreateAnnotationInput) => Promise<IpcResult<Annotation>>
+  updateAnnotation: (input: UpdateAnnotationInput) => Promise<IpcResult<Annotation>>
+  deleteAnnotation: (id: string) => Promise<IpcResult<Annotation>>
+  restoreAnnotation: (id: string) => Promise<IpcResult<Annotation>>
   pathForFile: (file: File) => string
 }

@@ -1,7 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import ePub from 'epubjs'
 import type { Book as EpubBook, Contents, Location, NavItem, Rendition } from 'epubjs'
-import type { ShelfBook } from '../../shared/types'
+import type {
+  Annotation,
+  AnnotationColor,
+  AnnotationLocator,
+  ShelfBook,
+} from '../../shared/types'
+import { buildContext, findBestQuote, normalizeText } from '../../shared/locator'
+import AnnotationRail from '../annotations/AnnotationRail'
+import NoteEditor from '../annotations/NoteEditor'
+import SelectionMenu from '../annotations/SelectionMenu'
+import { HIGHLIGHT_COLORS } from '../annotations/colors'
 import { api } from '../lib/api'
 import { loadBookAsEpub } from '../lib/convert/text-epub'
 import { percentLabel } from '../lib/format'
@@ -19,6 +29,7 @@ import {
 } from '../lib/prefs'
 import { applyReaderTheme, LINE_HEIGHT_KEYS, MARGIN_KEYS, READER_THEMES } from './theme'
 import TocDrawer, { type TocEntry } from './TocDrawer'
+import { rangeFromOffsets, readSelection, type SelectionResult } from './selection'
 
 type ReaderStatus = 'loading' | 'ready' | 'error'
 
@@ -71,6 +82,131 @@ function spineFallback(book: EpubBook): TocEntry[] {
     .filter((entry) => entry.href.length > 0)
 }
 
+/**
+ * 把标注画成 epub.js 的 SVG 高亮。先撤掉上一轮，避免改颜色后叠两层。
+ * 返回这一轮实际挂上的 CFI，供下次清理。
+ */
+function syncHighlights(
+  rendition: Rendition,
+  list: Annotation[],
+  previous: string[],
+  onSelect: (id: string) => void,
+): string[] {
+  for (const cfi of previous) {
+    try {
+      rendition.annotations.remove(cfi, 'highlight')
+    } catch {
+      // 章节已被卸载时 remove 会找不到 view，忽略即可。
+    }
+  }
+
+  const attached: string[] = []
+  for (const annotation of list) {
+    if (annotation.kind === 'bookmark' || !annotation.locator.cfi) continue
+    const color = HIGHLIGHT_COLORS[annotation.color]
+    try {
+      rendition.annotations.highlight(
+        annotation.locator.cfi,
+        { id: annotation.id },
+        () => onSelect(annotation.id),
+        'lumen-highlight',
+        {
+          fill: color.fill,
+          'fill-opacity': '0.32',
+          'mix-blend-mode': 'multiply',
+        },
+      )
+      attached.push(annotation.locator.cfi)
+    } catch (error) {
+      console.warn('[Lumen] 高亮没有画出来', annotation.id, error)
+    }
+  }
+  return attached
+}
+
+async function markOrphan(annotation: Annotation): Promise<Annotation> {
+  const result = await api.updateAnnotation({ id: annotation.id, orphaned: true })
+  return result.ok ? result.data : { ...annotation, orphaned: 1 }
+}
+
+/**
+ * 打开书后逐条校验：CFI 还能取到且文字对得上就跳过；否则按 quote + 上下文
+ * 在所属章节里重新找位置。找不到只标 orphaned，不删除标注。
+ */
+async function reanchorAnnotations(book: EpubBook, list: Annotation[]): Promise<Annotation[]> {
+  const next: Annotation[] = []
+
+  for (const annotation of list) {
+    if (annotation.orphaned === 1) {
+      next.push(annotation)
+      continue
+    }
+
+    const locator = annotation.locator
+    const quote = normalizeText(locator.quote)
+    let valid = false
+
+    if (locator.cfi) {
+      try {
+        const range = await book.getRange(locator.cfi)
+        const rangeText = normalizeText(range.toString())
+        valid = rangeText.length > 0 && (quote ? rangeText.includes(quote) || quote.includes(rangeText) : true)
+      } catch {
+        valid = false
+      }
+    }
+    if (valid) {
+      next.push(annotation)
+      continue
+    }
+
+    // 书签没有 quote，CFI 失效后无法按文本找回，只能标记位置失效。
+    if (!quote) {
+      next.push(await markOrphan(annotation))
+      continue
+    }
+
+    const section =
+      (locator.href ? book.spine.get(locator.href) : null) ??
+      book.spine.get(locator.chapterIndex)
+    if (!section) {
+      next.push(await markOrphan(annotation))
+      continue
+    }
+
+    try {
+      // Section.load 的类型声明写成同步返回 Document，实际是 Promise；这里局部断言。
+      await (section.load(book.load.bind(book)) as unknown as Promise<unknown>)
+      const document = section.document
+      const text = document.body.textContent ?? ''
+      const best = findBestQuote(text, locator.quote, locator.prefix, locator.suffix)
+      const range = best ? rangeFromOffsets(document, best.start, best.end) : null
+      if (!best || !range) {
+        next.push(await markOrphan(annotation))
+        continue
+      }
+
+      const cfi = section.cfiFromRange(range)
+      const context = buildContext(text, best.start, best.end)
+      const nextLocator: AnnotationLocator = {
+        ...locator,
+        cfi,
+        href: normalizeHref(section.href || locator.href),
+        quote: context.quote || locator.quote,
+        prefix: context.prefix,
+        suffix: context.suffix,
+      }
+      const result = await api.updateAnnotation({ id: annotation.id, locator: nextLocator })
+      next.push(result.ok ? result.data : { ...annotation, locator: nextLocator })
+    } catch (error) {
+      console.warn('[Lumen] 重锚失败', annotation.id, error)
+      next.push(await markOrphan(annotation))
+    }
+  }
+
+  return next
+}
+
 export default function ReaderView({ book, onExit }: ReaderViewProps) {
   const viewRef = useRef<HTMLDivElement | null>(null)
   const renditionRef = useRef<Rendition | null>(null)
@@ -78,6 +214,25 @@ export default function ReaderView({ book, onExit }: ReaderViewProps) {
   const spineLengthRef = useRef(0)
   const saveTimerRef = useRef<number | undefined>(undefined)
   const pendingRef = useRef<PendingProgress | null>(null)
+  const contentsRef = useRef<Contents | null>(null)
+  const chapterLocatorRef = useRef<AnnotationLocator>({
+    format: book.format,
+    cfi: null,
+    href: '',
+    chapterIndex: 0,
+    chapterTitle: '',
+    page: 0,
+    percent: 0,
+    quote: '',
+    prefix: '',
+    suffix: '',
+  })
+  const highlightCfisRef = useRef<string[]>([])
+  const annotationsRef = useRef<Annotation[]>([])
+  const selectionRef = useRef<SelectionResult | null>(null)
+  const editingIdRef = useRef<string | null>(null)
+  const railOpenRef = useRef(false)
+  const toastTimerRef = useRef<number | undefined>(undefined)
 
   const [prefs, setPrefs] = useState<ReaderPrefs>(readReaderPrefs)
   const [entries, setEntries] = useState<TocEntry[]>([])
@@ -89,6 +244,12 @@ export default function ReaderView({ book, onExit }: ReaderViewProps) {
   const [pageInfo, setPageInfo] = useState({ current: 0, total: 0 })
   const [status, setStatus] = useState<ReaderStatus>('loading')
   const [errorMessage, setErrorMessage] = useState('')
+  const [annotations, setAnnotations] = useState<Annotation[]>([])
+  const [railOpen, setRailOpen] = useState(false)
+  const [selection, setSelection] = useState<SelectionResult | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [savingNote, setSavingNote] = useState(false)
+  const [toast, setToast] = useState<{ message: string; undo?: Annotation[] } | null>(null)
 
   // 异步回调与 iframe 内监听器要读最新值，闭包里的 state 会是旧的。
   const prefsRef = useRef(prefs)
@@ -99,6 +260,10 @@ export default function ReaderView({ book, onExit }: ReaderViewProps) {
   tocOpenRef.current = tocOpen
   const settingsOpenRef = useRef(settingsOpen)
   settingsOpenRef.current = settingsOpen
+  annotationsRef.current = annotations
+  selectionRef.current = selection
+  editingIdRef.current = editingId
+  railOpenRef.current = railOpen
 
   const flushProgress = useCallback(async () => {
     const pending = pendingRef.current
@@ -134,9 +299,189 @@ export default function ReaderView({ book, onExit }: ReaderViewProps) {
   const turnPage = useCallback((direction: 1 | -1) => {
     const rendition = renditionRef.current
     if (!rendition) return
+    setSelection(null)
     if (direction === 1) void rendition.next()
     else void rendition.prev()
   }, [])
+
+  const showToast = useCallback((message: string, undo?: Annotation[]) => {
+    window.clearTimeout(toastTimerRef.current)
+    setToast({ message, undo })
+    toastTimerRef.current = window.setTimeout(
+      () => setToast(null),
+      undo && undo.length > 0 ? 5000 : 2600,
+    )
+  }, [])
+
+  const clearSelection = useCallback(() => {
+    try {
+      contentsRef.current?.window.getSelection()?.removeAllRanges()
+    } catch {
+      // iframe 已经卸载时拿不到 selection，忽略。
+    }
+    setSelection(null)
+  }, [])
+
+  const handleHighlightClick = useCallback((id: string) => {
+    setSelection(null)
+    setRailOpen(true)
+    setEditingId(id)
+  }, [])
+
+  const createFromSelection = useCallback(
+    async (color: AnnotationColor, openNote: boolean) => {
+      const current = selectionRef.current
+      if (!current) return
+
+      const groupId = current.locators.length > 1 ? crypto.randomUUID() : null
+      const created: Annotation[] = []
+      let failure = ''
+
+      for (const locator of current.locators) {
+        const result = await api.createAnnotation({
+          bookId: bookRef.current.id,
+          kind: 'highlight',
+          color,
+          locator,
+          noteMd: '',
+          groupId,
+        })
+        if (result.ok) created.push(result.data)
+        else {
+          failure = result.message
+          break
+        }
+      }
+
+      clearSelection()
+      if (created.length === 0) {
+        if (failure) showToast(failure)
+        return
+      }
+
+      setAnnotations((previous) => [...previous, ...created])
+      if (openNote) {
+        setRailOpen(true)
+        setEditingId(created[0].id)
+      }
+      showToast(created.length > 1 ? `已标记 ${created.length} 段` : '已高亮')
+    },
+    [clearSelection, showToast],
+  )
+
+  const handleCopySelection = useCallback(async () => {
+    const current = selectionRef.current
+    if (!current) return
+    const text = current.locators.map((locator) => locator.quote).join('\n')
+    try {
+      await navigator.clipboard.writeText(text)
+      showToast('已复制选中文字')
+    } catch {
+      showToast('复制没有成功，请用 Ctrl+C。')
+    }
+    clearSelection()
+  }, [clearSelection, showToast])
+
+  const addBookmark = useCallback(async () => {
+    const current = chapterLocatorRef.current
+    if (!current.cfi) {
+      showToast('正文还在排版，稍后再加书签。')
+      return
+    }
+
+    const result = await api.createAnnotation({
+      bookId: bookRef.current.id,
+      kind: 'bookmark',
+      color: 'slate',
+      locator: { ...current, quote: '', prefix: '', suffix: '' },
+      noteMd: '',
+      groupId: null,
+    })
+    if (!result.ok) {
+      showToast(result.message)
+      return
+    }
+    setAnnotations((previous) => [...previous, result.data])
+    setRailOpen(true)
+    setEditingId(result.data.id)
+    showToast('已加书签')
+  }, [showToast])
+
+  const handleSelectAnnotation = useCallback((annotation: Annotation) => {
+    setSelection(null)
+    setRailOpen(true)
+    setEditingId(annotation.id)
+    if (annotation.orphaned === 1 || !annotation.locator.cfi) return
+    const rendition = renditionRef.current
+    if (!rendition) return
+    void Promise.resolve(rendition.display(annotation.locator.cfi)).catch((error: unknown) => {
+      console.warn('[Lumen] 标注跳转失败', annotation.id, error)
+    })
+  }, [])
+
+  const saveNote = useCallback(
+    async (patch: { color: AnnotationColor; noteMd: string }) => {
+      const id = editingIdRef.current
+      if (!id) return
+      setSavingNote(true)
+      try {
+        const result = await api.updateAnnotation({ id, color: patch.color, noteMd: patch.noteMd })
+        if (!result.ok) {
+          showToast(result.message)
+          return
+        }
+        setAnnotations((previous) =>
+          previous.map((annotation) => (annotation.id === id ? result.data : annotation)),
+        )
+        setEditingId(null)
+        showToast('批注已保存')
+      } finally {
+        setSavingNote(false)
+      }
+    },
+    [showToast],
+  )
+
+  const deleteAnnotation = useCallback(
+    async (annotation: Annotation) => {
+      // 跨段落高亮共用 groupId，删一条就整组删掉，避免留下半截。
+      const targets = annotation.groupId
+        ? annotationsRef.current.filter((item) => item.groupId === annotation.groupId)
+        : [annotation]
+      const removed: Annotation[] = []
+
+      for (const target of targets) {
+        const result = await api.deleteAnnotation(target.id)
+        if (result.ok) removed.push(result.data)
+      }
+      if (removed.length === 0) {
+        showToast('删除没有完成，请重试。')
+        return
+      }
+
+      const removedIds = new Set(removed.map((item) => item.id))
+      setAnnotations((previous) => previous.filter((item) => !removedIds.has(item.id)))
+      if (editingIdRef.current && removedIds.has(editingIdRef.current)) setEditingId(null)
+      showToast(removed.length > 1 ? `已删除 ${removed.length} 段标注` : '已删除标注', removed)
+    },
+    [showToast],
+  )
+
+  const undoDelete = useCallback(async () => {
+    const targets = toast?.undo
+    if (!targets || targets.length === 0) return
+    const restored: Annotation[] = []
+    for (const target of targets) {
+      const result = await api.restoreAnnotation(target.id)
+      if (result.ok) restored.push(result.data)
+    }
+    window.clearTimeout(toastTimerRef.current)
+    setToast(null)
+    if (restored.length > 0) {
+      setAnnotations((previous) => [...previous, ...restored])
+      showToast('已撤销删除')
+    }
+  }, [showToast, toast])
 
   // 退出前先落库，否则最后一次翻页会丢，书架上的百分比会落后一截。
   const exitReader = useCallback(async () => {
@@ -149,6 +494,17 @@ export default function ReaderView({ book, onExit }: ReaderViewProps) {
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'b') {
+        event.preventDefault()
+        void addBookmark()
+        return
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'e') {
+        event.preventDefault()
+        if (!editingIdRef.current) setRailOpen(true)
+        return
+      }
+
       switch (event.key) {
         case 'ArrowRight':
         case 'PageDown':
@@ -162,7 +518,13 @@ export default function ReaderView({ book, onExit }: ReaderViewProps) {
           turnPage(-1)
           break
         case 'Escape':
-          if (settingsOpenRef.current) {
+          if (selectionRef.current) {
+            setSelection(null)
+          } else if (editingIdRef.current) {
+            setEditingId(null)
+          } else if (railOpenRef.current) {
+            setRailOpen(false)
+          } else if (settingsOpenRef.current) {
             setSettingsOpen(false)
           } else if (tocOpenRef.current) {
             setTocOpen(false)
@@ -174,7 +536,7 @@ export default function ReaderView({ book, onExit }: ReaderViewProps) {
           break
       }
     },
-    [exitReader, turnPage],
+    [addBookmark, exitReader, turnPage],
   )
 
   // 键盘要注册两处：焦点在 iframe 内时事件不会冒泡到父窗口。
@@ -238,6 +600,7 @@ export default function ReaderView({ book, onExit }: ReaderViewProps) {
         applyReaderTheme(rendition, prefsRef.current)
 
         rendition.hooks.content.register((contents: Contents) => {
+          contentsRef.current = contents
           contents.document.addEventListener('keydown', (event: KeyboardEvent) => {
             keyHandlerRef.current(event)
           })
@@ -267,6 +630,19 @@ export default function ReaderView({ book, onExit }: ReaderViewProps) {
           setChapterTitle(chapter.label)
           setPercent(nextPercent)
           setPageInfo({ current: displayed?.page ?? 0, total: displayed?.total ?? 0 })
+          setSelection(null)
+          chapterLocatorRef.current = {
+            format: bookRef.current.format,
+            cfi: start.cfi ?? null,
+            href: chapter.href,
+            chapterIndex: start.index,
+            chapterTitle: chapter.label,
+            page: displayed?.page ?? 0,
+            percent: nextPercent,
+            quote: '',
+            prefix: '',
+            suffix: '',
+          }
 
           queueProgress({
             cfi: start.cfi ?? null,
@@ -278,9 +654,28 @@ export default function ReaderView({ book, onExit }: ReaderViewProps) {
           })
         })
 
+        rendition.on('selected', (_cfiRange: string, contents: Contents) => {
+          if (disposed) return
+          contentsRef.current = contents
+          try {
+            setSelection(
+              readSelection(contents, chapterLocatorRef.current, bookRef.current.format),
+            )
+          } catch (error) {
+            console.warn('[Lumen] 读取选区失败', error)
+            setSelection(null)
+          }
+        })
+
         const saved = await api.getProgress(book.id)
         if (disposed) return
         const startCfi = saved.ok ? saved.data?.locator.cfi ?? null : null
+
+        const listed = await api.listAnnotations(book.id)
+        if (disposed) return
+        const initialAnnotations = listed.ok ? listed.data : []
+        if (listed.ok) setAnnotations(initialAnnotations)
+        else console.warn('[Lumen] 标注读取失败', listed.message)
 
         try {
           await rendition.display(startCfi ?? undefined)
@@ -290,6 +685,17 @@ export default function ReaderView({ book, onExit }: ReaderViewProps) {
         }
         if (disposed) return
         setStatus('ready')
+
+        // 重锚不阻塞首屏：先显示正文，再逐条核对 CFI / 原文片段。
+        if (initialAnnotations.length > 0) {
+          void reanchorAnnotations(epubBook, initialAnnotations)
+            .then((checked) => {
+              if (!disposed) setAnnotations(checked)
+            })
+            .catch((error: unknown) => {
+              console.warn('[Lumen] 标注校验失败', error)
+            })
+        }
 
         // 章节定位表比较耗时，等首屏稳定后在后台生成，只用于更精确的百分比。
         locationsTimer = window.setTimeout(() => {
@@ -345,9 +751,12 @@ export default function ReaderView({ book, onExit }: ReaderViewProps) {
       window.clearTimeout(resizeTimer)
       window.clearTimeout(locationsTimer)
       window.clearTimeout(saveTimerRef.current)
+      window.clearTimeout(toastTimerRef.current)
       observer.disconnect()
       window.removeEventListener('keydown', onWindowKeyDown)
       void flushProgress()
+      contentsRef.current = null
+      highlightCfisRef.current = []
       renditionRef.current = null
       // 顺序不能反：先 rendition 再 book，各自兜住异常，避免留下 iframe。
       try {
@@ -362,6 +771,18 @@ export default function ReaderView({ book, onExit }: ReaderViewProps) {
       }
     }
   }, [book.id, flushProgress, queueProgress])
+
+  // 标注变化后重画当前视图的高亮；章节切换时 epub.js 会自动把已注册的标注挂到新视图。
+  useEffect(() => {
+    const rendition = renditionRef.current
+    if (!rendition || status !== 'ready') return
+    highlightCfisRef.current = syncHighlights(
+      rendition,
+      annotations,
+      highlightCfisRef.current,
+      handleHighlightClick,
+    )
+  }, [annotations, status, handleHighlightClick])
 
   // 偏好变化立即写 localStorage 并作用到当前 contents。
   useEffect(() => {
@@ -384,6 +805,9 @@ export default function ReaderView({ book, onExit }: ReaderViewProps) {
   }
 
   const chapterIndex = entries.findIndex((entry) => entry.href === activeHref)
+  const editingAnnotation = editingId
+    ? annotations.find((annotation) => annotation.id === editingId) ?? null
+    : null
   const goChapter = (step: 1 | -1) => {
     const next = entries[chapterIndex + step]
     if (next) goTo(next.href)
@@ -413,6 +837,18 @@ export default function ReaderView({ book, onExit }: ReaderViewProps) {
           {chapterTitle && <span className="reader-chapter">{chapterTitle}</span>}
         </div>
         <div className="reader-actions">
+          <button
+            type="button"
+            className={`icon-btn ${railOpen ? 'is-active' : ''}`}
+            onClick={() => setRailOpen((open) => !open)}
+            title="本书标注（Ctrl+E）"
+          >
+            标注
+            {annotations.length > 0 && <span className="icon-count">{annotations.length}</span>}
+          </button>
+          <button type="button" className="icon-btn" onClick={() => void addBookmark()} title="书签（Ctrl+B）">
+            书签
+          </button>
           <button
             type="button"
             className={`icon-btn ${tocOpen ? 'is-active' : ''}`}
@@ -551,6 +987,48 @@ export default function ReaderView({ book, onExit }: ReaderViewProps) {
             onSelect={goTo}
             onClose={() => setTocOpen(false)}
           />
+        )}
+
+        {selection && (
+          <SelectionMenu
+            anchor={selection.anchor}
+            onHighlight={(color) => void createFromSelection(color, false)}
+            onNote={() => void createFromSelection('yellow', true)}
+            onCopy={() => void handleCopySelection()}
+            onClose={() => setSelection(null)}
+          />
+        )}
+
+        {editingAnnotation ? (
+          <NoteEditor
+            key={editingAnnotation.id}
+            annotation={editingAnnotation}
+            saving={savingNote}
+            onSave={(patch) => void saveNote(patch)}
+            onDelete={() => void deleteAnnotation(editingAnnotation)}
+            onClose={() => setEditingId(null)}
+          />
+        ) : (
+          railOpen && (
+            <AnnotationRail
+              annotations={annotations}
+              activeId={editingId}
+              onSelect={handleSelectAnnotation}
+              onDelete={(annotation) => void deleteAnnotation(annotation)}
+              onClose={() => setRailOpen(false)}
+            />
+          )
+        )}
+
+        {toast && (
+          <div className="reader-toast" role="status">
+            <span>{toast.message}</span>
+            {toast.undo && toast.undo.length > 0 && (
+              <button type="button" className="toast-undo" onClick={() => void undoDelete()}>
+                撤销
+              </button>
+            )}
+          </div>
         )}
       </div>
 
