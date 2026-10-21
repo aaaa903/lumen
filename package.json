@@ -16,9 +16,9 @@
     "db:inspect": "electron scripts/db-inspect.cjs",
     "icon": "node scripts/make-icon.mjs",
     "collect": "node scripts/collect-desktop.mjs",
-    "pack:dir": "npm run build && electron-builder --dir",
-    "pack": "npm run build && electron-builder --win && npm run collect",
-    "pack:portable": "npm run build && electron-builder --win zip && npm run collect",
+    "pack:dir": "npm run build && npm run icon && electron-builder --dir",
+    "pack": "npm run build && npm run icon && electron-builder --win --publish never && npm run collect",
+    "pack:portable": "npm run build && npm run icon && electron-builder --win zip --publish never && npm run collect",
     "site:build": "node site/build.mjs",
     "release:assets": "node scripts/release-assets.mjs",
     "release:notes": "node scripts/release-notes.mjs"
