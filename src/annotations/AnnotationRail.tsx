@@ -4,6 +4,10 @@ import { HIGHLIGHT_COLORS } from './colors'
 type AnnotationRailProps = {
   annotations: Annotation[]
   activeId: string | null
+  selectedIds: Set<string>
+  exporting: boolean
+  onToggleSelect: (id: string) => void
+  onExport: (ids: string[] | null) => void
   onSelect: (annotation: Annotation) => void
   onDelete: (annotation: Annotation) => void
   onClose: () => void
@@ -46,6 +50,10 @@ function groupByChapter(annotations: Annotation[]): ChapterGroup[] {
 export default function AnnotationRail({
   annotations,
   activeId,
+  selectedIds,
+  exporting,
+  onToggleSelect,
+  onExport,
   onSelect,
   onDelete,
   onClose,
@@ -59,9 +67,29 @@ export default function AnnotationRail({
           <p className="rail-kicker">标注</p>
           <p className="rail-count">{annotations.length} 条</p>
         </div>
-        <button type="button" className="ghost-btn" onClick={onClose} title="关闭标注侧栏">
-          ×
-        </button>
+        <div className="rail-head-actions">
+          <button
+            type="button"
+            className="ghost-btn"
+            onClick={() => onExport(null)}
+            disabled={annotations.length === 0 || exporting}
+            title="把这本书的全部标注导出为 Markdown"
+          >
+            导出全部
+          </button>
+          <button
+            type="button"
+            className="ghost-btn"
+            onClick={() => onExport([...selectedIds])}
+            disabled={selectedIds.size === 0 || exporting}
+            title="只导出勾选的标注"
+          >
+            导出所选（{selectedIds.size}）
+          </button>
+          <button type="button" className="ghost-btn" onClick={onClose} title="关闭标注侧栏">
+            ×
+          </button>
+        </div>
       </header>
 
       {annotations.length === 0 ? (
@@ -85,6 +113,13 @@ export default function AnnotationRail({
                       }`}
                       key={annotation.id}
                     >
+                      <input
+                        type="checkbox"
+                        className="rail-check"
+                        checked={selectedIds.has(annotation.id)}
+                        onChange={() => onToggleSelect(annotation.id)}
+                        aria-label={`选择这条标注：${annotation.locator.quote.slice(0, 20)}`}
+                      />
                       <button
                         type="button"
                         className="rail-open"

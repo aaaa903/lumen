@@ -20,6 +20,23 @@ const api: LumenApi = {
   updateAnnotation: (input) => ipcRenderer.invoke('annotations:update', input),
   deleteAnnotation: (id) => ipcRenderer.invoke('annotations:delete', { id }),
   restoreAnnotation: (id) => ipcRenderer.invoke('annotations:restore', { id }),
+  indexBegin: (bookId) => ipcRenderer.invoke('search:indexBegin', { bookId }),
+  indexChunks: (bookId, chunks) => ipcRenderer.invoke('search:indexChunks', { bookId, chunks }),
+  indexFinish: (bookId) => ipcRenderer.invoke('search:indexFinish', { bookId }),
+  search: (input) => ipcRenderer.invoke('search:query', input),
+  listTags: () => ipcRenderer.invoke('tags:list'),
+  createTag: (name) => ipcRenderer.invoke('tags:create', { name }),
+  renameTag: (id, name) => ipcRenderer.invoke('tags:rename', { id, name }),
+  deleteTag: (id) => ipcRenderer.invoke('tags:delete', { id }),
+  mergeTags: (sourceId, targetId) => ipcRenderer.invoke('tags:merge', { sourceId, targetId }),
+  listAnnotationTags: (bookId) => ipcRenderer.invoke('tags:forBook', { bookId }),
+  setAnnotationTags: (annotationId, tagIds) =>
+    ipcRenderer.invoke('tags:setForAnnotation', { annotationId, tagIds }),
+  listNotes: () => ipcRenderer.invoke('notes:list'),
+  saveNote: (input) => ipcRenderer.invoke('notes:save', input),
+  deleteNote: (id) => ipcRenderer.invoke('notes:delete', { id }),
+  exportAnnotations: (input) => ipcRenderer.invoke('export:bookAnnotations', input),
+  saveText: (input) => ipcRenderer.invoke('app:saveText', input),
   // 拖放进来的 File 不在渲染层持有真实路径，必须由 preload 的 webUtils 取。
   pathForFile: (file) => {
     try {

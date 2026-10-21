@@ -1,12 +1,16 @@
 import { useState } from 'react'
 import DOMPurify from 'dompurify'
-import type { Annotation, AnnotationColor } from '../../shared/types'
+import type { Annotation, AnnotationColor, Tag } from '../../shared/types'
 import { markdownToHtml } from '../lib/convert/markdown'
 import { COLOR_ORDER, HIGHLIGHT_COLORS } from './colors'
 
 type NoteEditorProps = {
   annotation: Annotation
   saving: boolean
+  tags: Tag[]
+  assignedTagIds: string[]
+  onToggleTag: (tagId: string) => void
+  onCreateTag: (name: string) => void
   onSave: (patch: { color: AnnotationColor; noteMd: string }) => void
   onDelete: () => void
   onClose: () => void
@@ -16,6 +20,10 @@ type NoteEditorProps = {
 export default function NoteEditor({
   annotation,
   saving,
+  tags,
+  assignedTagIds,
+  onToggleTag,
+  onCreateTag,
   onSave,
   onDelete,
   onClose,
@@ -23,6 +31,7 @@ export default function NoteEditor({
   const [note, setNote] = useState(annotation.noteMd)
   const [color, setColor] = useState<AnnotationColor>(annotation.color)
   const [preview, setPreview] = useState(false)
+  const [newTag, setNewTag] = useState('')
 
   const isBookmark = annotation.kind === 'bookmark'
 
@@ -55,6 +64,59 @@ export default function NoteEditor({
           />
         ))}
         <span className="note-color-label">{HIGHLIGHT_COLORS[color].label}色</span>
+      </div>
+
+      <div className="note-tags">
+        <p className="note-tags-label">标签</p>
+        <div className="tag-chips">
+          {tags.length === 0 && <span className="note-tags-empty">还没有标签，在下面新建一个。</span>}
+          {tags.map((tag) => {
+            const active = assignedTagIds.includes(tag.id)
+            return (
+              <button
+                key={tag.id}
+                type="button"
+                className={`tag-chip tag-${tag.color} ${active ? 'is-active' : ''}`}
+                onClick={() => onToggleTag(tag.id)}
+                title={active ? '取消这个标签' : '加上这个标签'}
+              >
+                {tag.name}
+              </button>
+            )
+          })}
+        </div>
+        <div className="tag-create">
+          <input
+            value={newTag}
+            maxLength={40}
+            placeholder="新建标签"
+            onChange={(event) => setNewTag(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                const name = newTag.trim()
+                if (name) {
+                  onCreateTag(name)
+                  setNewTag('')
+                }
+              }
+            }}
+          />
+          <button
+            type="button"
+            className="ghost-btn"
+            disabled={newTag.trim().length === 0}
+            onClick={() => {
+              const name = newTag.trim()
+              if (name) {
+                onCreateTag(name)
+                setNewTag('')
+              }
+            }}
+          >
+            添加
+          </button>
+        </div>
       </div>
 
       <div className="note-toolbar">

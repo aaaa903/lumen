@@ -1,8 +1,18 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { AppVersions, ImportResult, ShelfBook } from './lib/api'
+import type { AppVersions, ImportResult, OpenTarget, ShelfBook } from './lib/api'
 import { api } from './lib/api'
 import ShelfView from './library/ShelfView'
+import NotesView from './notes/NotesView'
 import ReaderView from './reader/ReaderView'
+import SearchView from './search/SearchView'
+
+type View = 'shelf' | 'search' | 'notes'
+
+const VIEW_LABEL: Record<View, string> = {
+  shelf: '书架',
+  search: '搜索',
+  notes: '笔记',
+}
 
 export default function App() {
   const [books, setBooks] = useState<ShelfBook[]>([])
@@ -10,6 +20,8 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [importing, setImporting] = useState(false)
   const [activeId, setActiveId] = useState<string | null>(null)
+  const [openTarget, setOpenTarget] = useState<OpenTarget | null>(null)
+  const [view, setView] = useState<View>('shelf')
   const [notice, setNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -89,16 +101,40 @@ export default function App() {
     await handleImport(result.data)
   }, [handleImport])
 
-  const handleOpen = useCallback(async (book: ShelfBook) => {
-    setNotice(null)
-    setError(null)
-    const result = await api.touchBook(book.id)
-    if (!result.ok) {
-      setError(result.message)
-      return
-    }
-    setActiveId(book.id)
-  }, [])
+  const openBook = useCallback(
+    async (bookId: string, target: OpenTarget | null) => {
+      const book = books.find((item) => item.id === bookId)
+      if (!book) {
+        setError('这本书不在书库里，可能已被移出。刷新后再试。')
+        return
+      }
+
+      setNotice(null)
+      setError(null)
+      const result = await api.touchBook(book.id)
+      if (!result.ok) {
+        setError(result.message)
+        return
+      }
+      setOpenTarget(target)
+      setActiveId(book.id)
+    },
+    [books],
+  )
+
+  const handleOpen = useCallback(
+    (book: ShelfBook) => {
+      void openBook(book.id, null)
+    },
+    [openBook],
+  )
+
+  const handleSearchOpen = useCallback(
+    (target: OpenTarget) => {
+      void openBook(target.bookId, target)
+    },
+    [openBook],
+  )
 
   const handleRemove = useCallback(
     async (book: ShelfBook) => {
@@ -126,25 +162,51 @@ export default function App() {
 
   const exitReader = useCallback(() => {
     setActiveId(null)
+    setOpenTarget(null)
     void refresh()
   }, [refresh])
 
   const activeBook = activeId ? books.find((book) => book.id === activeId) ?? null : null
 
   if (activeBook) {
-    return <ReaderView book={activeBook} onExit={exitReader} />
+    return (
+      <ReaderView
+        book={activeBook}
+        target={openTarget}
+        onIndexed={() => void refresh()}
+        onExit={exitReader}
+      />
+    )
   }
 
   return (
     <div className="app">
       <header className="topbar">
-        <div className="brand">
+        <button type="button" className="brand" onClick={() => setView('shelf')}>
           <span className="brand-mark" aria-hidden="true">
             L
           </span>
           <span className="brand-name">Lumen</span>
-        </div>
-        <span className="badge">{versions ? `v${versions.app}` : 'v0.0.2'}</span>
+        </button>
+        <span className="badge">{versions ? `v${versions.app}` : 'v0.0.4'}</span>
+
+        <nav className="topnav" aria-label="主导航">
+          {(['shelf', 'search', 'notes'] as View[]).map((item) => (
+            <button
+              key={item}
+              type="button"
+              className={`topnav-item ${view === item ? 'is-active' : ''}`}
+              onClick={() => {
+                setView(item)
+                setNotice(null)
+                setError(null)
+              }}
+            >
+              {VIEW_LABEL[item]}
+            </button>
+          ))}
+        </nav>
+
         <div className="topbar-spacer" />
         <button type="button" className="ghost-button" onClick={() => void handleOpenUserData()}>
           数据目录
@@ -159,15 +221,19 @@ export default function App() {
         </button>
       </header>
 
-      <ShelfView
-        books={books}
-        loading={loading}
-        importing={importing}
-        onImport={(paths) => void handleImport(paths)}
-        onPick={() => void handlePick()}
-        onOpen={(book) => void handleOpen(book)}
-        onRemove={(book) => void handleRemove(book)}
-      />
+      {view === 'shelf' && (
+        <ShelfView
+          books={books}
+          loading={loading}
+          importing={importing}
+          onImport={(paths) => void handleImport(paths)}
+          onPick={() => void handlePick()}
+          onOpen={handleOpen}
+          onRemove={(book) => void handleRemove(book)}
+        />
+      )}
+      {view === 'search' && <SearchView onOpen={handleSearchOpen} />}
+      {view === 'notes' && <NotesView books={books} />}
 
       <footer className="statusbar">
         {error ? (

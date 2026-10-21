@@ -8,7 +8,7 @@ Lumen：本地优先的阅读、标注与知识库桌面应用（Windows，Elect
 
 无账号、无云端、零网络请求。产品边界见 [PRD.md](./PRD.md)，实现细节见 [TECH_DESIGN.md](./TECH_DESIGN.md)。
 
-当前状态：**M2（0.0.3）已完成**——导入 EPUB / Markdown / TXT、书架、epub.js 分页、目录、进度续读、排版与配色、高亮批注书签、侧栏、重锚可用；M3 知识库正在实现。动手前先看 `docs/IMPLEMENTATION_PROMPT.md` 的里程碑顺序。
+当前状态：**M3（0.0.4）已完成**——导入 EPUB / Markdown / TXT、书架、epub.js 分页、目录、进度续读、排版与配色、高亮批注书签、侧栏、重锚、跨书全文搜索、标签、独立笔记、导出 Markdown 均可用；M4 打包与官网正在实现。动手前先看 `docs/IMPLEMENTATION_PROMPT.md` 的里程碑顺序。
 
 ## 命令
 
@@ -37,7 +37,7 @@ node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字�
 | `electron/ipc/*.ts` | 通道注册、参数校验、错误包装 | 改接口契约（同时改 `shared/types.ts`） |
 | `electron/db/open.ts` | 打开数据库、PRAGMA、迁移执行、备份 | 改 schema 版本或迁移策略 |
 | `electron/db/migrations/*.sql` | 迁移脚本，只增不改 | 加表、加列、加索引 |
-| `electron/db/repositories/*.ts` | 全部 SQL（`books.ts` / `progress.ts` / M2 起的 `annotations.ts`） | 改查询；不要把 SQL 写到别处 |
+| `electron/db/repositories/*.ts` | 全部 SQL（`books` / `progress` / `annotations` / `search` / `tags` / `notes`） | 改查询；不要把 SQL 写到别处 |
 | `electron/library/import.ts` | 导入编排：一次性读取、SHA-256、去重、写文件、元数据、封面 | 改导入流程 |
 | `electron/library/paths.ts` | 相对 userData 的路径解析与越界防护 | 改文件落点 |
 | `shared/text-book.ts` | TXT / Markdown 解码、章节切分、元数据 | 改文本格式支持（必须加单测） |
@@ -46,11 +46,14 @@ node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字�
 | `electron/security/network.ts` | 请求白名单与日志 | 调整允许的源（谨慎） |
 | `shared/types.ts` | 主进程与渲染层共用的类型 | 改数据形状 |
 | `shared/locator.ts` | locator 的生成、校验、重锚打分 | 改标注定位（必须加单测） |
-| `src/reader/*` | epub.js 生命周期、分页、目录、主题、进度 | 改阅读体验 |
+| `shared/search-query.ts` | MATCH / LIKE 参数生成、片段截取 | 改搜索（必须加单测） |
+| `shared/export.ts` | 标注 → Markdown 的纯函数 | 改导出格式 |
+| `src/reader/*` | epub.js 生命周期、分页、目录、主题、进度、索引器 | 改阅读体验 |
 | `src/annotations/*` | 选中工具条、高亮渲染、侧栏、批注编辑器 | 改标注交互 |
 | `src/library/*` | 书架网格、导入入口、移除 | 改书架呈现 |
-| `src/search/*`、`src/notes/*` | 搜索与笔记视图 | 改知识库 |
+| `src/search/*`、`src/notes/*` | 搜索、笔记与标签视图 | 改知识库 |
 | `src/lib/api.ts` | 类型化 IPC 客户端，唯一调用 `window.lumen` 的地方 | 新增通道 |
+| `shared/export.ts` | 标注导出 Markdown（纯函数） | 改导出格式 |
 | `src/styles.css` | 全部样式，含配色变量 | 任何视觉调整 |
 | `site/` | 官网（Astro），独立 `package.json` | 改官网 |
 | `docs/` | 实施提示词与官网提示词 | 改交付方式 |
@@ -72,7 +75,8 @@ node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字�
 
 - schema 变更必须：新建 `migrations/NNN_*.sql` + 提升 `PRAGMA user_version` + 在 `docs` 与本文同步。老数据兼容优先，宁加列不删列。
 - 迁移前自动备份数据库到 `userData/backups/`，保留最近 3 份。
-- 读路径默认过滤 `deleted_at IS NOT NULL` 的行；软删是默认，物理删除只发生在「彻底删除」与文件清理。- 所有写事务走 `withTransaction(db, fn)`（`electron/db/open.ts`）；不要在业务代码里散落 `BEGIN` / `COMMIT`。
+- 读路径默认过滤 `deleted_at IS NOT NULL` 的行；软删是默认，物理删除只发生在「彻底删除」与文件清理。
+- 所有写事务走 `withTransaction(db, fn)`（`electron/db/open.ts`）；不要在业务代码里散落 `BEGIN` / `COMMIT`。
 - `db.exec()` 只用于迁移脚本与 `PRAGMA`；带参数的语句一律 `prepare().run/get/all`。
 - FTS 的 `MATCH` 参数只允许由 `shared/search-query.ts` 生成，禁止在调用点拼字符串。
 - 删书分两种：`books:remove({ purge: false })` 只写 `deleted_at`，标注与笔记保留；`purge: true` 才级联删除并删源文件。

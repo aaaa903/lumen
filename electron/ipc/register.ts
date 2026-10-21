@@ -3,8 +3,12 @@ import type { AppVersions } from '../../shared/types'
 import { getSchemaVersion, type Db } from '../db/open'
 import { registerBookIpc } from './books'
 import { registerAnnotationIpc } from './annotations'
+import { registerExportIpc } from './export'
 import { fail, handle, ok } from './handle'
+import { registerNoteIpc } from './notes'
 import { registerProgressIpc } from './progress'
+import { registerSearchIpc } from './search'
+import { registerTagIpc } from './tags'
 
 /** 统一注册 IPC。每个通道只做参数校验与转发，业务逻辑留在 repositories 或 library。 */
 export function registerIpc(db: Db): void {
@@ -29,4 +33,8 @@ export function registerIpc(db: Db): void {
   registerBookIpc(db)
   registerProgressIpc(db)
   registerAnnotationIpc(db)
+  registerSearchIpc(db)
+  registerTagIpc(db)
+  registerNoteIpc(db)
+  registerExportIpc(db)
 }

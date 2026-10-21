@@ -5,16 +5,22 @@ import type {
   Annotation,
   AnnotationColor,
   AnnotationLocator,
+  AnnotationTag,
+  ExportPayload,
+  OpenTarget,
   ShelfBook,
+  Tag,
 } from '../../shared/types'
 import { buildContext, findBestQuote, normalizeText } from '../../shared/locator'
 import AnnotationRail from '../annotations/AnnotationRail'
+import ExportDialog from '../annotations/ExportDialog'
 import NoteEditor from '../annotations/NoteEditor'
 import SelectionMenu from '../annotations/SelectionMenu'
 import { HIGHLIGHT_COLORS } from '../annotations/colors'
 import { api } from '../lib/api'
 import { loadBookAsEpub } from '../lib/convert/text-epub'
 import { percentLabel } from '../lib/format'
+import { indexBook } from './indexer'
 import {
   FONT_MAX,
   FONT_MIN,
@@ -44,6 +50,9 @@ type PendingProgress = {
 
 type ReaderViewProps = {
   book: ShelfBook
+  /** 从搜索或标注列表进入时要跳到的位置；为空则按上次进度续读。 */
+  target: OpenTarget | null
+  onIndexed?: () => void
   onExit: () => void
 }
 
@@ -207,7 +216,65 @@ async function reanchorAnnotations(book: EpubBook, list: Annotation[]): Promise<
   return next
 }
 
-export default function ReaderView({ book, onExit }: ReaderViewProps) {
+type LoadableSection = {
+  document?: Document | null
+  load?: (loader: unknown) => unknown
+  cfiFromRange?: (range: Range) => string
+}
+
+/**
+ * 从搜索结果进入时，用临时高亮标出命中位置，6 秒后自动撤掉。
+ * 找不到片段就只停在那一章，不打断阅读。
+ */
+async function flashSearchHit(
+  rendition: Rendition,
+  book: EpubBook,
+  target: OpenTarget,
+): Promise<void> {
+  const href = normalizeHref(target.href)
+  const section = (href ? book.spine.get(href) : null) ?? book.spine.get(target.chapterIndex)
+  if (!section) return
+
+  const loadable = section as unknown as LoadableSection
+  if (!loadable.document) {
+    try {
+      await (loadable.load?.(book.load.bind(book)) as unknown as Promise<unknown>)
+    } catch {
+      return
+    }
+  }
+
+  const document = loadable.document
+  const quote = target.quote.trim()
+  if (!document || !quote) return
+
+  const text = document.body.textContent ?? ''
+  const best = findBestQuote(text, quote)
+  if (!best) return
+  const range = rangeFromOffsets(document, best.start, best.end)
+  if (!range || !loadable.cfiFromRange) return
+
+  const cfi = loadable.cfiFromRange(range)
+  if (!cfi) return
+  try {
+    rendition.annotations.highlight(cfi, { id: 'lumen-search-hit' }, undefined, 'lumen-search-hit', {
+      fill: '#f2c94c',
+      'fill-opacity': '0.48',
+      'mix-blend-mode': 'multiply',
+    })
+    window.setTimeout(() => {
+      try {
+        rendition.annotations.remove(cfi, 'highlight')
+      } catch {
+        // 章节已卸载时忽略。
+      }
+    }, 6000)
+  } catch {
+    // 当前视图尚未渲染到该章时忽略，用户仍能停在正确章节。
+  }
+}
+
+export default function ReaderView({ book, target, onIndexed, onExit }: ReaderViewProps) {
   const viewRef = useRef<HTMLDivElement | null>(null)
   const renditionRef = useRef<Rendition | null>(null)
   const tocRef = useRef<TocEntry[]>([])
@@ -233,6 +300,8 @@ export default function ReaderView({ book, onExit }: ReaderViewProps) {
   const editingIdRef = useRef<string | null>(null)
   const railOpenRef = useRef(false)
   const toastTimerRef = useRef<number | undefined>(undefined)
+  const onIndexedRef = useRef(onIndexed)
+  onIndexedRef.current = onIndexed
 
   const [prefs, setPrefs] = useState<ReaderPrefs>(readReaderPrefs)
   const [entries, setEntries] = useState<TocEntry[]>([])
@@ -250,6 +319,11 @@ export default function ReaderView({ book, onExit }: ReaderViewProps) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [savingNote, setSavingNote] = useState(false)
   const [toast, setToast] = useState<{ message: string; undo?: Annotation[] } | null>(null)
+  const [tags, setTags] = useState<Tag[]>([])
+  const [annotationTags, setAnnotationTags] = useState<AnnotationTag[]>([])
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
+  const [exportPayload, setExportPayload] = useState<ExportPayload | null>(null)
+  const [exporting, setExporting] = useState(false)
 
   // 异步回调与 iframe 内监听器要读最新值，闭包里的 state 会是旧的。
   const prefsRef = useRef(prefs)
@@ -264,6 +338,8 @@ export default function ReaderView({ book, onExit }: ReaderViewProps) {
   selectionRef.current = selection
   editingIdRef.current = editingId
   railOpenRef.current = railOpen
+  const annotationTagsRef = useRef(annotationTags)
+  annotationTagsRef.current = annotationTags
 
   const flushProgress = useCallback(async () => {
     const pending = pendingRef.current
@@ -547,12 +623,138 @@ export default function ReaderView({ book, onExit }: ReaderViewProps) {
     saveLastBook(book.id)
   }, [book.id])
 
+  const refreshTags = useCallback(async () => {
+    const [tagResult, assignmentResult] = await Promise.all([
+      api.listTags(),
+      api.listAnnotationTags(book.id),
+    ])
+    if (tagResult.ok) setTags(tagResult.data)
+    if (assignmentResult.ok) setAnnotationTags(assignmentResult.data)
+  }, [book.id])
+
+  useEffect(() => {
+    void refreshTags()
+  }, [refreshTags])
+
+  const toggleAnnotationTag = useCallback(
+    async (tagId: string) => {
+      const id = editingIdRef.current
+      if (!id) return
+
+      const current = annotationTagsRef.current
+        .filter((item) => item.annotationId === id)
+        .map((item) => item.tagId)
+      const next = current.includes(tagId)
+        ? current.filter((item) => item !== tagId)
+        : [...current, tagId]
+
+      const result = await api.setAnnotationTags(id, next)
+      if (!result.ok) {
+        showToast(result.message)
+        return
+      }
+      setAnnotationTags((previous) => [
+        ...previous.filter((item) => item.annotationId !== id),
+        ...next.map((tagIdValue) => ({ annotationId: id, tagId: tagIdValue })),
+      ])
+      void refreshTags()
+    },
+    [refreshTags, showToast],
+  )
+
+  const createTagForAnnotation = useCallback(
+    async (name: string) => {
+      const result = await api.createTag(name)
+      if (!result.ok) {
+        showToast(result.message)
+        return
+      }
+
+      const id = editingIdRef.current
+      if (id) {
+        const current = annotationTagsRef.current
+          .filter((item) => item.annotationId === id)
+          .map((item) => item.tagId)
+        const next = [...current, result.data.id]
+        const assigned = await api.setAnnotationTags(id, next)
+        if (!assigned.ok) {
+          showToast(assigned.message)
+          return
+        }
+        setAnnotationTags((previous) => [
+          ...previous.filter((item) => item.annotationId !== id),
+          ...next.map((tagIdValue) => ({ annotationId: id, tagId: tagIdValue })),
+        ])
+      }
+
+      await refreshTags()
+      showToast(`已添加标签「${result.data.name}」`)
+    },
+    [refreshTags, showToast],
+  )
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((previous) => {
+      const next = new Set(previous)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
+
+  const runExport = useCallback(
+    async (ids: string[] | null) => {
+      setExporting(true)
+      try {
+        const result = await api.exportAnnotations({
+          bookId: bookRef.current.id,
+          ids: ids && ids.length > 0 ? ids : undefined,
+        })
+        if (!result.ok) {
+          showToast(result.message)
+          return
+        }
+        setExportPayload(result.data)
+      } finally {
+        setExporting(false)
+      }
+    },
+    [showToast],
+  )
+
+  const copyExport = useCallback(async () => {
+    if (!exportPayload) return
+    try {
+      await navigator.clipboard.writeText(exportPayload.markdown)
+      showToast('已复制 Markdown')
+    } catch {
+      showToast('复制没有成功，请选中文本后按 Ctrl+C。')
+    }
+  }, [exportPayload, showToast])
+
+  const saveExport = useCallback(async () => {
+    if (!exportPayload) return
+    const result = await api.saveText({
+      suggestedName: `${bookRef.current.title}-标注.md`,
+      content: exportPayload.markdown,
+    })
+    if (!result.ok) {
+      showToast(result.message)
+      return
+    }
+    if (result.data) {
+      setExportPayload(null)
+      showToast('已保存 Markdown 文件')
+    }
+  }, [exportPayload, showToast])
+
   useEffect(() => {
     let disposed = false
     let rendition: Rendition | null = null
     let epubBook: EpubBook | null = null
     let resizeTimer: number | undefined
     let locationsTimer: number | undefined
+    let indexTimer: number | undefined
 
     const resolveChapter = (href: string, index: number): TocEntry => {
       const target = normalizeHref(href)
@@ -677,14 +879,28 @@ export default function ReaderView({ book, onExit }: ReaderViewProps) {
         if (listed.ok) setAnnotations(initialAnnotations)
         else console.warn('[Lumen] 标注读取失败', listed.message)
 
-        try {
-          await rendition.display(startCfi ?? undefined)
-        } catch {
-          // 存下的 CFI 可能因文件被改写而失效，退回首页而不是让整本书打不开。
-          await rendition.display()
+        // 从搜索进入时直接跳到命中章节；否则按上次进度续读。
+        const jumpTarget = target && target.bookId === bookRef.current.id ? target : null
+        if (jumpTarget && jumpTarget.href) {
+          try {
+            await rendition.display(normalizeHref(jumpTarget.href))
+          } catch {
+            await rendition.display(startCfi ?? undefined)
+          }
+        } else {
+          try {
+            await rendition.display(startCfi ?? undefined)
+          } catch {
+            // 存下的 CFI 可能因文件被改写而失效，退回首页而不是让整本书打不开。
+            await rendition.display()
+          }
         }
         if (disposed) return
         setStatus('ready')
+
+        if (jumpTarget) {
+          void flashSearchHit(rendition, epubBook, jumpTarget)
+        }
 
         // 重锚不阻塞首屏：先显示正文，再逐条核对 CFI / 原文片段。
         if (initialAnnotations.length > 0) {
@@ -696,6 +912,17 @@ export default function ReaderView({ book, onExit }: ReaderViewProps) {
               console.warn('[Lumen] 标注校验失败', error)
             })
         }
+
+        // 首次打开时在后台建全文索引；失败不影响阅读，下次打开会重试。
+        indexTimer = window.setTimeout(() => {
+          if (disposed || !epubBook) return
+          if (bookRef.current.indexedAt !== null) return
+          void indexBook(epubBook, bookRef.current, tocRef.current, () => disposed).then(
+            (done) => {
+              if (done && !disposed) onIndexedRef.current?.()
+            },
+          )
+        }, 2500)
 
         // 章节定位表比较耗时，等首屏稳定后在后台生成，只用于更精确的百分比。
         locationsTimer = window.setTimeout(() => {
@@ -750,6 +977,7 @@ export default function ReaderView({ book, onExit }: ReaderViewProps) {
       disposed = true
       window.clearTimeout(resizeTimer)
       window.clearTimeout(locationsTimer)
+      window.clearTimeout(indexTimer)
       window.clearTimeout(saveTimerRef.current)
       window.clearTimeout(toastTimerRef.current)
       observer.disconnect()
@@ -783,6 +1011,16 @@ export default function ReaderView({ book, onExit }: ReaderViewProps) {
       handleHighlightClick,
     )
   }, [annotations, status, handleHighlightClick])
+
+  // 删除标注后把已选项收敛到仍存在的条目，避免导出时 ids 指向已删除的记录。
+  useEffect(() => {
+    setSelectedIds((previous) => {
+      if (previous.size === 0) return previous
+      const valid = new Set(annotations.map((annotation) => annotation.id))
+      const next = new Set([...previous].filter((id) => valid.has(id)))
+      return next.size === previous.size ? previous : next
+    })
+  }, [annotations])
 
   // 偏好变化立即写 localStorage 并作用到当前 contents。
   useEffect(() => {
@@ -1004,6 +1242,12 @@ export default function ReaderView({ book, onExit }: ReaderViewProps) {
             key={editingAnnotation.id}
             annotation={editingAnnotation}
             saving={savingNote}
+            tags={tags}
+            assignedTagIds={annotationTags
+              .filter((item) => item.annotationId === editingAnnotation.id)
+              .map((item) => item.tagId)}
+            onToggleTag={(tagId) => void toggleAnnotationTag(tagId)}
+            onCreateTag={(name) => void createTagForAnnotation(name)}
             onSave={(patch) => void saveNote(patch)}
             onDelete={() => void deleteAnnotation(editingAnnotation)}
             onClose={() => setEditingId(null)}
@@ -1013,6 +1257,10 @@ export default function ReaderView({ book, onExit }: ReaderViewProps) {
             <AnnotationRail
               annotations={annotations}
               activeId={editingId}
+              selectedIds={selectedIds}
+              exporting={exporting}
+              onToggleSelect={toggleSelect}
+              onExport={(ids) => void runExport(ids)}
               onSelect={handleSelectAnnotation}
               onDelete={(annotation) => void deleteAnnotation(annotation)}
               onClose={() => setRailOpen(false)}
@@ -1029,6 +1277,15 @@ export default function ReaderView({ book, onExit }: ReaderViewProps) {
               </button>
             )}
           </div>
+        )}
+
+        {exportPayload && (
+          <ExportDialog
+            payload={exportPayload}
+            onSave={() => void saveExport()}
+            onCopy={() => void copyExport()}
+            onClose={() => setExportPayload(null)}
+          />
         )}
       </div>
 

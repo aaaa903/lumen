@@ -126,6 +126,112 @@ export type ImportResult =
   | { status: 'duplicate'; bookId: string; title: string }
   | { status: 'error'; fileName: string; code: IpcErrorCode; message: string }
 
+/** 索引器按章节提交的纯文本；渲染层负责从 epub.js 取文本，主进程只写库。 */
+export type IndexChunk = {
+  chapterIndex: number
+  chapterTitle: string
+  href: string
+  text: string
+}
+
+export type SearchScope = 'text' | 'annotations'
+
+export type SearchInput = {
+  q: string
+  scope: SearchScope
+  /** 只搜某个标签下的标注；scope 为 text 时忽略。 */
+  tagId?: string | null
+  limit?: number
+}
+
+export type TextSearchHit = {
+  kind: 'text'
+  bookId: string
+  bookTitle: string
+  author: string
+  chapterIndex: number
+  chapterTitle: string
+  href: string
+  snippet: string
+  matchStart: number
+  matchLength: number
+}
+
+export type AnnotationSearchHit = {
+  kind: 'annotation'
+  annotationId: string
+  bookId: string
+  bookTitle: string
+  author: string
+  chapterIndex: number
+  chapterTitle: string
+  href: string
+  quote: string
+  noteMd: string
+  color: AnnotationColor
+  annotationKind: AnnotationKind
+  createdAt: number
+}
+
+export type SearchHit = TextSearchHit | AnnotationSearchHit
+
+/** 从搜索结果或外部入口打开一本书时要跳到的位置。 */
+export type OpenTarget = {
+  bookId: string
+  href: string
+  chapterIndex: number
+  chapterTitle: string
+  quote: string
+}
+
+export type Tag = {
+  id: string
+  name: string
+  color: string
+  createdAt: number
+  /** 使用该标签的未删除标注数量。 */
+  count: number
+}
+
+export type AnnotationTag = {
+  annotationId: string
+  tagId: string
+}
+
+export type Note = {
+  id: string
+  bookId: string | null
+  bookTitle: string
+  title: string
+  bodyMd: string
+  createdAt: number
+  updatedAt: number
+}
+
+export type SaveNoteInput = {
+  /** 不传表示新建。 */
+  id?: string
+  bookId: string | null
+  title: string
+  bodyMd: string
+}
+
+export type ExportRequest = {
+  bookId: string
+  /** 不传或空数组表示导出整本书的标注。 */
+  ids?: string[]
+}
+
+export type ExportPayload = {
+  markdown: string
+  count: number
+}
+
+export type SaveTextInput = {
+  suggestedName: string
+  content: string
+}
+
 /** 预加载暴露给渲染层的全部能力。新增通道时同步 electron/preload.ts 与 src/lib/api.ts。 */
 export type LumenApi = {
   versions: () => Promise<IpcResult<AppVersions>>
@@ -151,4 +257,20 @@ export type LumenApi = {
   deleteAnnotation: (id: string) => Promise<IpcResult<Annotation>>
   restoreAnnotation: (id: string) => Promise<IpcResult<Annotation>>
   pathForFile: (file: File) => string
+  indexBegin: (bookId: string) => Promise<IpcResult<null>>
+  indexChunks: (bookId: string, chunks: IndexChunk[]) => Promise<IpcResult<null>>
+  indexFinish: (bookId: string) => Promise<IpcResult<null>>
+  search: (input: SearchInput) => Promise<IpcResult<SearchHit[]>>
+  listTags: () => Promise<IpcResult<Tag[]>>
+  createTag: (name: string) => Promise<IpcResult<Tag>>
+  renameTag: (id: string, name: string) => Promise<IpcResult<Tag>>
+  deleteTag: (id: string) => Promise<IpcResult<null>>
+  mergeTags: (sourceId: string, targetId: string) => Promise<IpcResult<Tag>>
+  listAnnotationTags: (bookId: string) => Promise<IpcResult<AnnotationTag[]>>
+  setAnnotationTags: (annotationId: string, tagIds: string[]) => Promise<IpcResult<null>>
+  listNotes: () => Promise<IpcResult<Note[]>>
+  saveNote: (input: SaveNoteInput) => Promise<IpcResult<Note>>
+  deleteNote: (id: string) => Promise<IpcResult<null>>
+  exportAnnotations: (input: ExportRequest) => Promise<IpcResult<ExportPayload>>
+  saveText: (input: SaveTextInput) => Promise<IpcResult<{ path: string } | null>>
 }

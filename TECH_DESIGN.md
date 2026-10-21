@@ -1,7 +1,7 @@
 # Lumen 技术设计
 
-版本：0.3（M2 已实现，M3 进行中）
-对应 PRD：0.3
+版本：0.4（M3 已实现，M4 进行中）
+对应 PRD：0.4
 最后更新：2026-10-21
 
 本文描述**现状与下一步**。代码与本文冲突时，以代码为准并立即修正本文，不留「待更新」。
@@ -82,13 +82,15 @@ electron/
     handle.ts              入参校验与 Result 包装
     books.ts               导入、列表、读取、移除
     progress.ts            进度读写
-    annotations.ts         标注增删改查（M2）
-    notes.ts               独立笔记（M3）
-    search.ts              全文与标注检索（M3）
+    annotations.ts         标注增删改查
+    notes.ts               独立笔记
+    search.ts              索引写入、正文与标注检索
+    tags.ts                标签管理与关联
+    export.ts              标注导出、保存 Markdown
   db/
     open.ts                打开数据库、PRAGMA、迁移
     migrations/001_init.sql
-    repositories/          books.ts / progress.ts / annotations.ts（M2）
+    repositories/          books / progress / annotations / search / tags / notes
   library/
     import.ts              读取文件、算 hash、解析元数据、落盘
     epub-meta.ts           只读 container.xml + OPF 与封面
@@ -99,18 +101,17 @@ electron/
 shared/
   types.ts                 主进程与渲染层共用的类型
   text-book.ts             TXT / Markdown 解码、章节切分
-  locator.ts               标注定位与重锚（M2）
-  search-query.ts          搜索语句构造（M3）
+  locator.ts               标注定位与重锚
+  search-query.ts          检索语句构造、片段截取
+  export.ts                标注 → Markdown（纯函数）
 src/
   main.tsx                 React 挂载
   App.tsx                  路由：书架 / 阅读器 / 搜索 / 笔记
-  components/              无业务耦合的展示组件
-  library/                 书架
-  reader/                  epub.js 生命周期、分页、目录、主题
-  annotations/             选中工具条、高亮渲染、侧栏、批注编辑器（M2）
-  search/                  搜索视图（M3）
-  notes/                   独立笔记（M3）
-  export/                  Markdown 导出（M3）
+  library/                 书架、封面占位、导入入口
+  reader/                  epub.js 生命周期、分页、目录、主题、索引器
+  annotations/             选中工具条、高亮渲染、侧栏、批注编辑器、导出预览
+  search/                  跨书搜索视图
+  notes/                   独立笔记与标签管理
   lib/
     api.ts                 类型化 IPC 客户端
     format.ts              体积、百分比、相对时间
@@ -125,7 +126,7 @@ scripts/
   db-inspect.cjs           只读查看当前数据库（npm run db:inspect）
   cdp-eval.mjs             在渲染层执行表达式（调试用，不提交临时脚本）
   cdp-console.mjs          收集渲染层控制台输出
-  cdp-front.mjs            读取页面可见文本
+  cdp-front.mjs            把窗口提到前台并检查 requestAnimationFrame
   make-icon.mjs            应用图标（M4）
 build/                     打包图标（不进版本库）
 site/                      官网（M4，独立 package）
@@ -306,6 +307,7 @@ Markdown / TXT 的转换结果按 `bookId` 缓存在内存，最多 3 本（`src
 - `relocated` 事件触发后 400 ms 防抖写入，避免每次翻页都写库。
 - 退出阅读器与窗口关闭前强制 flush，否则最后一次翻页丢失。
 - 百分比优先用 epub.js 的 locations 表；表尚未生成时按「章节序号 + 本章页码比例」估算，生成后校准一次。
+- 进度不记录阅读时长，也不上报任何统计。
 
 ### 6.4 locator 结构
 
@@ -324,7 +326,7 @@ type Locator = {
 }
 ```
 
-`locator` 以 JSON 文本存库，读取时用 zod 校验，校验失败视为 `orphaned`，不抛错阻断整页渲染。
+`locator` 以 JSON 文本存库，读取时经 `shared/locator.ts` 的 `parseLocator` 校验（不引入 zod，手写校验只覆盖固定字段）；校验失败视为 `orphaned`，不抛错阻断整页渲染。标注的 `quote` 必填，书签写空串。
 
 ### 6.5 标注创建
 
@@ -336,7 +338,7 @@ type Locator = {
   └─ INSERT annotations（kind = highlight，note_md 为空）
 ```
 
-批注写入走 `annotations:update`，输入先经 `markdown-it` + `dompurify` 消毒再入库（只存 Markdown 源，展示时才渲染）。
+批注写入走 `annotations:update`，库里只存 Markdown 源；展示时才经 `markdown-it` 渲染并用 `dompurify` 消毒，不把渲染后的 HTML 入库。
 
 ### 6.6 重锚（核心）
 
@@ -369,11 +371,12 @@ for each annotation:
 
 ### 6.7 搜索索引
 
-- 触发：打开一本书后空闲 2 秒；或用户在书库点「建立索引」。
-- 执行位置：渲染层（能拿到 epub.js 解析后的 DOM），逐章 `section.load()` → `section.document.body.innerText`。
-- 提交：按章分批 `search:indexChunks(bookId, chunks)`，主进程单事务写入 `search_chunks`，FTS 由触发器同步。
-- 章节标题取 TOC 中与 href 对应的标题，取不到时用 `第 N 章`。
-- 完成后写 `books.indexed_at`。
+- 触发：打开一本书并完成首屏渲染后，空闲 2.5 秒自动开始；`indexedAt` 非空则跳过。没有手动「建立索引」按钮。
+- 执行位置：渲染层（能拿到 epub.js 解析后的 DOM），逐章 `spine.get(i).load()` → `document.body.textContent`。
+- 批量：累计 30 万字符提交一次；单章超过 50 万字符截断；单次 IPC 最多 500 块 / 500 万字符。
+- 提交：`search:indexBegin` 清空旧块并把 `indexed_at` 置空 → 多次 `search:indexChunks`（单事务写入）→ `search:indexFinish` 写时间戳。FTS 由触发器同步。
+- 章节标题取 TOC 中与 href 对应的标题，取不到时用 `第 N 节`。
+- 索引中途失败或被取消时不写 `indexed_at`，下次打开重新索引。
 - 重新导入同一本书（不同 sha256）视为新书，各自索引。
 
 查询：
@@ -381,23 +384,31 @@ for each annotation:
 | 输入 | 语句 |
 | --- | --- |
 | 长度 ≥ 3 | `SELECT ... FROM search_fts JOIN search_chunks ON chunks.id = search_fts.rowid WHERE search_fts MATCH ? ORDER BY bm25(search_fts) LIMIT ?` |
-| 长度 < 3（中文常见） | `... WHERE chunks.text LIKE '%' \|\| ? \|\| '%' LIMIT ?` |
+| 长度 < 3（中文常见） | `... WHERE chunks.text LIKE ? ESCAPE '\\' ... LIMIT ?`，参数已是 `%词%` |
 
-`MATCH` 的参数做引号转义：把查询串里的 `"` 去掉，整体包成 `"..."`，避免 FTS 语法注入。高亮片段用 `snippet(search_fts, 0, '<mark>', '</mark>', '…', 12)`。
+`MATCH` 的参数只由 `shared/search-query.ts` 生成：查询串内的 `"` 写成两个 `""`，整体包成 `"..."`，避免 FTS 语法注入；LIKE 的 `\`、`%`、`_` 逐个转义。命中片段在渲染层用 `makeSnippet` 截取并高亮，不使用 SQL 的 `snippet()`。
 
-已知代价（2026-10-21 实测，详见 `docs/probe-fts.md`）：50 万字语料下 trigram 表为普通表的 1.47 倍（语料重复度高，属乐观值），建索引 36 ms，3 字以上 `MATCH` 0.02–0.12 ms，2 字 `LIKE` 0.45–0.64 ms。因此短查询直接走 `LIKE`，不另建倒排；M3 需用真实书籍复核索引体积，超过正文 3 倍时再考虑只索引标注所在章节。
+标注检索走普通 SQL（`locator` JSON 与 `note_md` 的 `LIKE`），标签过滤是 `annotation_tags` 的 `EXISTS` 子查询；结果按 `updated_at` 倒序。
+
+已知代价（2026-10-21 实测，详见 `docs/probe-fts.md`）：50 万字语料下 trigram 表为普通表的 1.47 倍（语料重复度高，属乐观值），建索引 36 ms，3 字以上 `MATCH` 0.02–0.12 ms，2 字 `LIKE` 0.45–0.64 ms。因此短查询直接走 `LIKE`，不另建倒排；用真实书籍复核后若超过正文 3 倍，再考虑只索引标注所在章节。
 
 ### 6.8 导出
 
-`export:bookAnnotations(bookId)` 在主进程拼 Markdown：查标注（按 `chapter_index, cfi` 排序）→ 分组 → 生成 front matter 与引用块。渲染层只负责保存对话框或复制到剪贴板。
+渲染层点「导出全部 / 导出所选」→ `export:bookAnnotations({ bookId, ids? })` 查标注并调用 `shared/export.ts` 的纯函数生成 Markdown → 弹出预览 → 用户选「保存为文件」或「复制」。「保存」再走 `app:saveText` 打开系统保存对话框并写盘，渲染层不碰文件系统。
+
+排序按 `chapterIndex`，同章按 CFI；跨段落同组标注各自成段。空标注也生成带 front matter 的文件，明确写「这本书还没有标注」。
 
 ```markdown
 ---
 title: 书名
 author: 作者
-exported_at: 2026-10-21T12:00:00+08:00
-lumen_version: 0.1.0
+exported_at: 2026-10-21T12:00:00.000Z
+lumen_version: 0.0.4
 ---
+
+# 书名
+
+作者
 
 ## 第三章 标题
 
@@ -420,56 +431,68 @@ type Result<T> = Ok<T> | Err
 
 | 通道 | 入参 | 返回 |
 | --- | --- | --- |
+| `app:versions` | — | `AppVersions` |
+| `app:openUserData` | — | `null` |
+| `app:pickFiles` | — | `string[]`（取消时为空数组） |
+| `app:saveText` | `{ suggestedName, content }` | `{ path } \| null`（取消时 null） |
 | `books:import` | `{ paths: string[] }` | `ImportResult[]` |
-| `books:list` | `{ includeRemoved?: boolean }` | `Book[]` |
-| `books:get` | `{ id }` | `Book` |
+| `books:list` | — | `ShelfBook[]` |
+| `books:get` | `{ id }` | `ShelfBook` |
 | `books:readFile` | `{ id }` | `ArrayBuffer` |
-| `books:readCover` | `{ id }` | `{ mime, data } \| null` |
-| `books:remove` | `{ id, purge?: boolean }` | `void` |
-| `books:touch` | `{ id }` | `void` |
-| `app:pickFiles` | — | `string[]` |
+| `books:readCover` | `{ id }` | `{ mime, data: ArrayBuffer } \| null` |
+| `books:remove` | `{ id, purge?: boolean }` | `null` |
+| `books:touch` | `{ id }` | `null` |
 | `progress:get` | `{ bookId }` | `Progress \| null` |
-| `progress:save` | `{ bookId, locator, percent, chapter }` | `void` |
+| `progress:save` | `{ bookId, locator, percent, chapter }` | `null` |
 | `annotations:list` | `{ bookId }` | `Annotation[]` |
-| `annotations:create` | `{ bookId, kind, color, locator, noteMd }` | `Annotation` |
-| `annotations:update` | `{ id, color?, noteMd?, locator? }` | `Annotation` |
-| `annotations:delete` | `{ id }` | `void` |
+| `annotations:create` | `CreateAnnotationInput` | `Annotation` |
+| `annotations:update` | `{ id, color?, noteMd?, locator?, orphaned? }` | `Annotation` |
+| `annotations:delete` | `{ id }` | `Annotation`（软删后的记录） |
 | `annotations:restore` | `{ id }` | `Annotation` |
-| `notes:list` / `notes:save` / `notes:delete` | — | — |
-| `tags:list` / `tags:create` / `tags:rename` / `tags:delete` / `tags:merge` | — | — |
-| `search:query` | `{ q, scope: 'text' \| 'annotations', bookId?, limit? }` | `SearchHit[]` |
-| `search:indexChunks` | `{ bookId, chunks }` | `void` |
-| `search:markIndexed` | `{ bookId }` | `void` |
-| `export:bookAnnotations` | `{ bookId }` | `{ markdown: string }` |
-| `app:openUserData` | — | `void` |
-| `app:versions` | — | `{ app, electron, sqlite }` |
+| `search:indexBegin` | `{ bookId }` | `null` |
+| `search:indexChunks` | `{ bookId, chunks: IndexChunk[] }` | `null` |
+| `search:indexFinish` | `{ bookId }` | `null` |
+| `search:query` | `{ q, scope: 'text' \| 'annotations', tagId?, limit? }` | `SearchHit[]` |
+| `tags:list` | — | `Tag[]` |
+| `tags:create` | `{ name }` | `Tag` |
+| `tags:rename` | `{ id, name }` | `Tag` |
+| `tags:delete` | `{ id }` | `null` |
+| `tags:merge` | `{ sourceId, targetId }` | `Tag` |
+| `tags:forBook` | `{ bookId }` | `AnnotationTag[]` |
+| `tags:setForAnnotation` | `{ annotationId, tagIds: string[] }` | `null` |
+| `notes:list` | — | `Note[]` |
+| `notes:save` | `{ id?, bookId, title, bodyMd }` | `Note` |
+| `notes:delete` | `{ id }` | `null` |
+| `export:bookAnnotations` | `{ bookId, ids?: string[] }` | `{ markdown, count }` |
 
-错误码：`DUPLICATE`、`ENCRYPTED`、`UNSUPPORTED`、`TOO_LARGE`、`PARSE_FAILED`、`NOT_FOUND`、`DB_ERROR`、`IO_ERROR`。
+错误码：`DUPLICATE`、`ENCRYPTED`、`UNSUPPORTED`、`TOO_LARGE`、`PARSE_FAILED`、`NOT_FOUND`、`DB_ERROR`、`IO_ERROR`、`INTERNAL`。渲染层按 `code` 决定下一步提示，不解析 `message`。
 
-渲染层类型定义放在 `src/lib/api.ts`，主进程复用同一份 `shared/types.ts`（两个 `tsconfig` 都包含），避免两边各写一套。
+渲染层类型定义放在 `src/lib/api.ts`，主进程复用同一份 `shared/types.ts`（两个 `tsconfig` 都包含），避免两边各写一套；新增通道必须同时改 `electron/preload.ts` 的 `LumenApi` 实现。
 
 ## 8. 渲染层结构
 
 ```
 App
-├─ ShelfView          书库：网格、导入、排序、移除
+├─ 顶栏              书架 / 搜索 / 笔记切换、导入、数据目录、版本号
+├─ ShelfView          书库：网格、筛选、拖放导入、移除
 ├─ ReaderView
-│  ├─ ReaderHeader    返回、书名、目录、搜索、设置
+│  ├─ 顶栏            返回、书名、目录、标注、书签、排版设置
 │  ├─ EpubCanvas      epub.js 挂载点 + 点击翻页层
-│  ├─ TocDrawer       目录
-│  ├─ AnnotationRail  侧栏：本章/全书标注
-│  ├─ SelectionMenu   选中浮动工具条
-│  └─ NoteEditor      CodeMirror 批注编辑
-├─ SearchView         跨书搜索（全局）
-├─ NotesView          独立笔记
-└─ SettingsDialog     数据目录、版本、清空数据
+│  ├─ TocDrawer       目录（递归展平、当前章高亮）
+│  ├─ AnnotationRail  侧栏：按章节分组的全部标注、多选、导出
+│  ├─ SelectionMenu   选中浮动工具条（四色高亮、批注、复制）
+│  ├─ NoteEditor      Markdown 文本域 + 预览、标签、删除
+│  └─ ExportDialog    导出预览、复制、保存
+├─ SearchView         跨书搜索（正文 / 标注、标签过滤）
+└─ NotesView          独立笔记与标签管理
 ```
 
 状态策略：
 
-- 书库与标注列表用 `useReducer` + 局部缓存，不引入全局 store。
-- 阅读器状态（currentLocation、rendition）留在 `ReaderView` 内的 ref，不进 React 树，避免每次翻页重渲染侧栏。
-- 跨视图通知只用两种：重新拉取（`refresh()`）与事件回调（`onExit`）。
+- 全部用函数组件 + `useState`/`useCallback`，不引入全局 store；跨组件共享靠 props 与回调。
+- 阅读器状态（`rendition`、`book`、当前 locator、选中状态）留在 `ReaderView` 内的 ref，不进 React 树，避免每次翻页导致整页重渲染。
+- 跨视图通知只有三种：`refresh()` 重新拉取、`onExit` 回书架、`onIndexed` 更新书架索引标记。
+- 搜索条件放在 `sessionStorage` 的 `lumen:search`，返回搜索页时保留输入；阅读偏好与上次打开的书在 `localStorage`。
 
 ## 9. 安全与隐私
 
@@ -487,48 +510,56 @@ App
 ## 10. 构建与打包
 
 - `electron-vite build` 产出 `dist/main`、`dist/preload`、`dist/renderer`。
-- `electron-builder` 配置：
-  - `files`: `dist/**`、`package.json`
-  - `win.target`: `nsis` + `zip`；`nsis.oneClick: false`、`allowToChangeInstallationDirectory: true`
-  - `artifactName`: `${productName}-${version}-${os}-${arch}.${ext}` 会与命名约定冲突，改用显式 `nsis.artifactName` 与 `zip` 后重命名脚本
-  - 目标目录 `../lumen-desktop-build/`，最终复制到仓库内 `desktop-dist/`（沿用旧版避开编辑器占用 `.asar` 的经验）
+- `electron-builder` 配置在 `package.json` 的 `build` 字段：
+  - `files`: `dist/**/*`、`package.json`
+  - `win.target`: `nsis` + `zip`，均 x64；`nsis.oneClick: false`、`perMachine: false`、`allowToChangeInstallationDirectory: true`、`createDesktopShortcut: true`
+  - 产物命名：`nsis.artifactName = Lumen-${version}-setup.${ext}`，`zip.artifactName = Lumen-${version}-portable.${ext}`
+  - 中间目录 `../lumen-desktop-build/`（项目同级，避开编辑器和杀毒软件锁定 `.asar`），`npm run collect` 把 `.exe` 与 `.zip` 复制回仓库内 `desktop-dist/`
 - 原生模块：**没有**。`node:sqlite` 随 Electron 一起分发，升级 Electron 时只需确认 `PRAGMA` 与 FTS5 仍可用（`npm run probe:fts` 会顺带打印 SQLite 版本）。
-- 图标：`scripts/make-icon.mjs` 纯 Node 生成 `build/icon.ico` 与 `icon.png`，不引入图形库。
+- 图标：`scripts/make-icon.mjs` 纯 Node 生成 `build/icon.ico` 与 `icon.png`，不引入图形库；`build/` 不进版本库。
 
 ## 11. 发布流水线
 
 ```
-git tag v0.1.0 → GitHub Actions
-  ├─ windows-latest：npm ci → typecheck → test → build → pack
+git tag v* → GitHub Actions（.github/workflows/release.yml）
+  ├─ windows-latest：npm ci → typecheck → test → build → electron-builder --win
+  ├─ 校验 tag 与 package.json version 相等
   ├─ 计算 SHA256SUMS.txt
-  ├─ 创建 Release（softprops/action-gh-release），上传 setup.exe / portable.zip / SHA256SUMS.txt
-  └─ 生成 site/releases.json（version / date / assets / notes）并提交到 gh-pages
+  ├─ softprops/action-gh-release 创建 Release，上传 setup.exe / portable.zip / SHA256SUMS.txt
+  ├─ 用 Release 资产信息生成 site/src/data/releases.json
+  └─ 构建 site/ 并部署到 GitHub Pages（actions/deploy-pages）
 ```
 
-- `releases.json` 是官网唯一数据源，字段见 `docs/WEBSITE_PROMPT.md`。
+- `releases.json` 是官网唯一数据源，字段见 `docs/WEBSITE_PROMPT.md`；首页、下载页、更新日志都从它读版本、大小与校验和。
+- 开发期里程碑（`0.0.x`）只打 tag，不创建 Release；`0.1.0` 起才发布。
 - Actions 使用 `GITHUB_TOKEN`，不配置任何第三方密钥。
-- 发布前必须通过 PRD §9 清单；CI 只保证构建与单测。
+- 发布前必须通过 PRD §9 清单；CI 只保证构建与单测，不跑 E2E。
 
 ## 12. 常量与配置
 
 | 常量 | 值 | 位置 |
 | --- | --- | --- |
-| 应用版本 | `0.0.3`（M2 标注），版本节奏见 PRD §1.2 | `package.json` |
+| 应用版本 | `0.0.4`（M3 知识库），版本节奏见 PRD §1.2 | `package.json` |
 | 数据库 schema 版本 | `1` | `PRAGMA user_version` |
 | 单文件导入上限 | 200 MB | `electron/library/import.ts` |
 | 内存 EPUB 缓存数量 | 3 | `src/lib/convert/text-epub.ts` |
 | 进度写入防抖 | 400 ms | `src/reader/ReaderView.tsx` |
-| 删除标注撤销窗口 | 5 s | `src/annotations/rail.tsx` |
+| 删除标注撤销窗口 | 5 s | `src/reader/ReaderView.tsx` |
 | 重锚相似度阈值 | 0.6 | `shared/locator.ts` |
 | quote 最大长度 | 500 字 | `shared/locator.ts` |
 | 上下文长度 | 32 字 | `shared/locator.ts` |
 | 搜索默认条数 | 50，上限 200 | `electron/ipc/search.ts` |
 | 短查询 LIKE 阈值 | 查询长度 < 3 字符时走 `LIKE`，≥3 走 `MATCH` | `shared/search-query.ts` |
-| 索引触发延迟 | 2 s 空闲 | `src/reader/indexer.ts` |
-| 缩略图最长边 | 480 px | `electron/library/covers.ts` |
+| 索引触发延迟 | 2.5 s 空闲 | `src/reader/ReaderView.tsx` |
+| 索引批量 | 每批 30 万字符；单章截断 50 万字符 | `src/reader/indexer.ts` |
+| 单次索引上限 | 500 块 / 500 万字符 | `electron/ipc/search.ts` |
+| 标签名上限 | 40 字 | `electron/ipc/tags.ts` |
+| 单条标注标签数上限 | 20 | `electron/ipc/tags.ts` |
+| 笔记正文上限 | 50 万字符 | `electron/ipc/notes.ts` |
+| 批注正文上限 | 20 万字符 | `electron/ipc/annotations.ts` |
 | 迁移备份保留 | 3 份 | `electron/db/open.ts` |
-| localStorage 前缀 | `lumen:` | `src/lib/prefs.ts` |
-| 允许的请求源 | `lumen:`、`devtools:`、`blob:`、`data:`、`about:`；开发期加 `http://localhost:5173`、`ws://localhost:5173` | `electron/security/network.ts` |
+| localStorage 前缀 | `lumen:` | `src/lib/prefs.ts`、`src/search/SearchView.tsx` |
+| 允许的请求源 | `lumen:`、`devtools:`、`chrome-extension:`、`chrome-devtools:`、`data:`、`blob:`、`about:`；开发期加渲染服务器与其 WebSocket 源 | `electron/security/network.ts` |
 
 ## 13. 测试策略
 
@@ -549,7 +580,7 @@ git tag v0.1.0 → GitHub Actions
 | PDF | 不支持 | V1 引入 pdf.js，标注单独一套 locator（页码 + 矩形坐标） |
 | 固定版式 EPUB | 不支持 | 不做 |
 | 首次搜索前需要索引 | 打开一本书后才索引，未打开的书搜不到 | V1 做隐藏窗口批量索引 |
-| trigram 索引体积 | 50 万字实测 1.47 倍（重复语料） | M3 用真实书复核，超 3 倍再改索引范围 |
+| trigram 索引体积 | 50 万字实测 1.47 倍（重复语料） | 用真实书复核，超 3 倍再改索引范围 |
 | `node:sqlite` 处于实验阶段 | API 可能随 Node/Electron 版本变化 | 全部调用收在 `electron/db/`，升级 Electron 时跑 `probe:fts` 与冒烟 |
 | 书内链接 | 脚注可能被翻页热区覆盖 | 扩大热区避让，见阅读器实现 |
 | 代码签名 | 未签名 | 购买证书后设置 `CSC_LINK`，Actions 加签名步骤 |

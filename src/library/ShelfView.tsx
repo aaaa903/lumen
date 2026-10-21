@@ -146,6 +146,11 @@ export default function ShelfView({
                   <span className={`format-badge format-${book.format}`}>
                     {FORMAT_LABEL[book.format]}
                   </span>
+                  {book.indexedAt === null && (
+                    <span className="index-badge" title="打开一次后会自动建立全文索引">
+                      未索引
+                    </span>
+                  )}
                   <span className="book-percent">{percentLabel(book.percent)}</span>
                 </span>
                 <span className="book-foot">
