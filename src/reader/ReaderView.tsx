@@ -404,6 +404,15 @@ export default function ReaderView({ book, target, onIndexed, onExit }: ReaderVi
     setEditingId(id)
   }, [])
 
+  // epub.js 只在 relocated 时给页码；改字号或窗口尺寸只重排、不发事件，
+  // 底部会一直停在旧分母，所以这两个动作之后主动读一次 currentLocation。
+  const refreshPageInfo = useCallback((rendition: Rendition) => {
+    const current = rendition.currentLocation() as unknown as Location | undefined
+    const displayed = current?.start?.displayed
+    if (!displayed) return
+    setPageInfo({ current: displayed.page ?? 0, total: displayed.total ?? 0 })
+  }, [])
+
   const createFromSelection = useCallback(
     async (color: AnnotationColor, openNote: boolean) => {
       const current = selectionRef.current
@@ -963,6 +972,7 @@ export default function ReaderView({ book, target, onIndexed, onExit }: ReaderVi
         try {
           // 必须传显式尺寸，不传会沿用旧尺寸，缩窗后正文被裁。
           rendition.resize(element.clientWidth, element.clientHeight)
+          refreshPageInfo(rendition)
         } catch {
           // 排版尚未就绪时忽略。
         }
@@ -998,7 +1008,7 @@ export default function ReaderView({ book, target, onIndexed, onExit }: ReaderVi
         // 同上。
       }
     }
-  }, [book.id, flushProgress, queueProgress])
+  }, [book.id, flushProgress, queueProgress, refreshPageInfo])
 
   // 标注变化后重画当前视图的高亮；章节切换时 epub.js 会自动把已注册的标注挂到新视图。
   useEffect(() => {
@@ -1026,8 +1036,12 @@ export default function ReaderView({ book, target, onIndexed, onExit }: ReaderVi
   useEffect(() => {
     saveReaderPrefs(prefs)
     const rendition = renditionRef.current
-    if (rendition) applyReaderTheme(rendition, prefs)
-  }, [prefs])
+    if (!rendition) return
+    applyReaderTheme(rendition, prefs)
+    // 字号/行距/页边距改变会重排，但不会触发 relocated，这里补一次页码刷新。
+    const timer = window.setTimeout(() => refreshPageInfo(rendition), 240)
+    return () => window.clearTimeout(timer)
+  }, [prefs, refreshPageInfo])
 
   const updatePrefs = (patch: Partial<ReaderPrefs>) => {
     setPrefs((current) => ({ ...current, ...patch }))

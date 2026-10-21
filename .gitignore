@@ -19,6 +19,8 @@ site/.astro/
 site/node_modules/
 
 # 测试与临时文件
+.tmp-*/
+scripts/tmp-*.mjs
 coverage/
 *.log
 logs/
