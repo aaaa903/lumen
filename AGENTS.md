@@ -8,9 +8,9 @@ Lumen：本地优先的阅读、标注与知识库桌面应用（Windows，Elect
 
 无账号、无云端、零网络请求。产品边界见 [PRD.md](./PRD.md)，实现细节见 [TECH_DESIGN.md](./TECH_DESIGN.md)。
 
-当前状态：**规划阶段，尚未创建 `package.json`**。动手前先看 `docs/IMPLEMENTATION_PROMPT.md` 的里程碑顺序。
+当前状态：**M1（0.0.2）已完成并提交**——导入 EPUB / Markdown / TXT、书架、epub.js 分页、目录、进度续读、排版与配色可用；M2 标注正在实现。动手前先看 `docs/IMPLEMENTATION_PROMPT.md` 的里程碑顺序。
 
-## 命令（实现后应与此一致）
+## 命令
 
 ```bash
 npm install        # 安装依赖（无原生模块，不需要编译工具链）
@@ -24,7 +24,7 @@ npm run db:inspect # 只读打开当前用户数据目录下的 lumen.db，排�
 node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字）
 ```
 
-调试渲染层：先设 `LUMEN_DEBUG_PORT=9223`（PowerShell 用 `$env:LUMEN_DEBUG_PORT='9223'`）再 `npm run dev`，然后通过 CDP 连 `http://127.0.0.1:9223/json/list` 检查页面与数据库状态。
+调试渲染层：先设 `LUMEN_DEBUG_PORT=9223`（PowerShell 用 `$env:LUMEN_DEBUG_PORT='9223'`）再 `npm run dev`，然后通过 CDP 连 `http://127.0.0.1:9223/json/list` 检查页面与数据库状态。仓库内的 `scripts/cdp-eval.mjs` 可执行一小段渲染层表达式：把表达式写进临时文件，运行 `node scripts/cdp-eval.mjs <文件>`；`cdp-console.mjs` 收集控制台输出，`cdp-front.mjs` 截取页面。临时脚本不要提交。
 
 没有 E2E 框架。改动阅读器或标注行为后，按 PRD §9 清单手测关键几条，并在回复里说明测了哪些。桌面端可加 `--remote-debugging-port=9223` 用 CDP 检查渲染层与 IndexedDB / SQLite 状态。
 
@@ -37,8 +37,11 @@ node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字�
 | `electron/ipc/*.ts` | 通道注册、参数校验、错误包装 | 改接口契约（同时改 `shared/types.ts`） |
 | `electron/db/open.ts` | 打开数据库、PRAGMA、迁移执行、备份 | 改 schema 版本或迁移策略 |
 | `electron/db/migrations/*.sql` | 迁移脚本，只增不改 | 加表、加列、加索引 |
-| `electron/db/repositories/*.ts` | 全部 SQL | 改查询；不要把 SQL 写到别处 |
-| `electron/library/import.ts` | 导入编排：hash、去重、复制、元数据、封面 | 改导入流程 |
+| `electron/db/repositories/*.ts` | 全部 SQL（`books.ts` / `progress.ts` / M2 起的 `annotations.ts`） | 改查询；不要把 SQL 写到别处 |
+| `electron/library/import.ts` | 导入编排：一次性读取、SHA-256、去重、写文件、元数据、封面 | 改导入流程 |
+| `electron/library/paths.ts` | 相对 userData 的路径解析与越界防护 | 改文件落点 |
+| `shared/text-book.ts` | TXT / Markdown 解码、章节切分、元数据 | 改文本格式支持（必须加单测） |
+| `src/lib/convert/*` | Markdown / TXT → 内存 EPUB 与缓存 | 改格式转换 |
 | `electron/library/epub-meta.ts` | 只读 container.xml + OPF | 扩元数据（如语言、出版日期） |
 | `electron/security/network.ts` | 请求白名单与日志 | 调整允许的源（谨慎） |
 | `shared/types.ts` | 主进程与渲染层共用的类型 | 改数据形状 |
@@ -48,7 +51,6 @@ node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字�
 | `src/library/*` | 书架网格、导入入口、移除 | 改书架呈现 |
 | `src/search/*`、`src/notes/*` | 搜索与笔记视图 | 改知识库 |
 | `src/lib/api.ts` | 类型化 IPC 客户端，唯一调用 `window.lumen` 的地方 | 新增通道 |
-| `src/lib/convert/*` | Markdown / TXT → 内存 EPUB 与缓存 | 改格式支持 |
 | `src/styles.css` | 全部样式，含配色变量 | 任何视觉调整 |
 | `site/` | 官网（Astro），独立 `package.json` | 改官网 |
 | `docs/` | 实施提示词与官网提示词 | 改交付方式 |

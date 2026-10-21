@@ -29,6 +29,13 @@ const CSP = [
 
 let mainWindow: BrowserWindow | null = null
 
+// Windows 上窗口被完全遮挡时 Chromium 会暂停 requestAnimationFrame，而 epub.js 的渲染队列
+// 依赖 rAF，分页会永久停在「正在排版…」。backgroundThrottling 只挡住一部分节流，
+// 这三个开关一起关掉后台/遮挡节流。
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
+app.commandLine.appendSwitch('disable-renderer-backgrounding')
+app.commandLine.appendSwitch('disable-background-timer-throttling')
+
 // 调试用：LUMEN_DEBUG_PORT=9223 启动后可用 CDP 检查渲染层与数据库状态。
 const debugPort = process.env['LUMEN_DEBUG_PORT']
 if (debugPort) app.commandLine.appendSwitch('remote-debugging-port', debugPort)

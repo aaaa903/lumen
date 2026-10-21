@@ -1,10 +1,10 @@
 # Lumen 技术设计
 
-版本：0.1（规划中，尚未实现）
+版本：0.2（M1 已实现，M2 进行中）
 对应 PRD：0.1
 最后更新：2026-10-21
 
-本文描述**要做成什么样**。代码尚未开始，实现时若与本文件冲突，以代码为准并立即更新本文。
+本文描述**现状与下一步**。代码与本文冲突时，以代码为准并立即修正本文，不留「待更新」。
 
 ## 1. 目标与约束
 
@@ -29,8 +29,8 @@
 | 界面 | React 19 | 函数组件 + hooks |
 | EPUB | `epub.js` | 0.3.x |
 | 打包 | `electron-builder` | NSIS + portable |
-| Markdown | `markdown-it` + `dompurify` | 只做渲染，不做编辑 |
-| 批注编辑 | CodeMirror 6 | `@codemirror/state` / `view` / `lang-markdown` |
+| Markdown | `markdown-it` | 只做渲染，不做编辑；TXT / Markdown 转换也用它 |
+| 批注编辑 | Markdown 文本域 + 实时预览（CodeMirror 6 在 M2 评估） | 先保证编辑与预览可用，再决定是否引入编辑器依赖 |
 | 测试 | Vitest | 纯逻辑单测，不做 E2E |
 
 ### 2.1 新增依赖的理由
@@ -38,9 +38,8 @@
 | 依赖 | 为什么不能用现有栈 | 体积（gzip） |
 | --- | --- | --- |
 | `electron-vite` | 主进程写 TS 需要一个打包步骤；比自建 `tsup + 重启脚本` 更少出错 | devDependency |
-| `markdown-it` | 渲染批注与笔记，`epub.js` 自带的 XHTML 处理不适用 | ~30 KB |
-| `dompurify` | Markdown 渲染结果必须消毒，避免书内 HTML 注入界面 | ~20 KB |
-| `@codemirror/*` | 需要一个可控的 Markdown 编辑器；避免引入完整编辑器框架 | ~120 KB |
+| `markdown-it` | 渲染批注与笔记，`epub.js` 自带的 XHTML 处理不适用；TXT / Markdown 转 EPUB 也复用 | ~30 KB |
+| `dompurify` | Markdown 渲染结果必须消毒，避免书内 HTML 注入界面（M2 引入） | ~20 KB |
 | `vitest` | 重锚与搜索语句构造必须有单测 | devDependency |
 
 **不引入 `better-sqlite3`。** 它在 Windows 上需要 Visual Studio Build Tools 编译，本机与 CI 都没有；而 Electron 44 自带的 `node:sqlite` 是同一个 SQLite（3.53.4），已编入 FTS5 与 `trigram`，且不需要 ABI 重建。代价是 API 仍标记为实验阶段，因此全部数据库调用收在 `electron/db/open.ts` 与 `electron/db/repositories/` 内，将来换驱动只动这一层。
@@ -80,24 +79,26 @@ electron/
   preload.ts               contextBridge 白名单
   ipc/
     register.ts            统一注册，错误统一包装
-    books.ts               导入、列表、删除
+    handle.ts              入参校验与 Result 包装
+    books.ts               导入、列表、读取、移除
     progress.ts            进度读写
-    annotations.ts         标注增删改查
-    notes.ts               独立笔记
-    search.ts              全文与标注检索
+    annotations.ts         标注增删改查（M2）
+    notes.ts               独立笔记（M3）
+    search.ts              全文与标注检索（M3）
   db/
     open.ts                打开数据库、PRAGMA、迁移
     migrations/001_init.sql
-    repositories/          books.ts / annotations.ts / search.ts
+    repositories/          books.ts / progress.ts / annotations.ts（M2）
   library/
-    import.ts              复制文件、算 hash、解析元数据
-    epub-meta.ts           只读 container.xml + OPF
-    covers.ts              封面提取与缩略图
+    import.ts              读取文件、算 hash、解析元数据、落盘
+    epub-meta.ts           只读 container.xml + OPF 与封面
+    paths.ts               相对 userData 的路径解析与越界防护
+    errors.ts              导入错误码
   security/
     network.ts             请求拦截
-  window.ts                窗口状态记忆（M1）
 shared/
   types.ts                 主进程与渲染层共用的类型
+  text-book.ts             TXT / Markdown 解码、章节切分
   locator.ts               标注定位与重锚（M2）
   search-query.ts          搜索语句构造（M3）
 src/
@@ -106,24 +107,28 @@ src/
   components/              无业务耦合的展示组件
   library/                 书架
   reader/                  epub.js 生命周期、分页、目录、主题
-  annotations/             选中工具条、高亮渲染、侧栏、批注编辑器
-  search/                  搜索视图
-  notes/                   独立笔记
-  export/                  Markdown 导出
+  annotations/             选中工具条、高亮渲染、侧栏、批注编辑器（M2）
+  search/                  搜索视图（M3）
+  notes/                   独立笔记（M3）
+  export/                  Markdown 导出（M3）
   lib/
     api.ts                 类型化 IPC 客户端
     format.ts              体积、百分比、相对时间
+    prefs.ts               localStorage 偏好
     convert/               Markdown / TXT → 内存 EPUB
   global.d.ts              window.lumen 类型声明
   styles.css
 docs/                      实施与官网提示词、FTS 实测结论
-site/                      官网（Astro 静态站，独立 package）
 scripts/
   make-sample-library.mjs  生成 5 本书用于搜索与性能验证
   probe-fts.cjs            FTS5 trigram 实测（npm run probe:fts）
   db-inspect.cjs           只读查看当前数据库（npm run db:inspect）
+  cdp-eval.mjs             在渲染层执行表达式（调试用，不提交临时脚本）
+  cdp-console.mjs          收集渲染层控制台输出
+  cdp-front.mjs            读取页面可见文本
   make-icon.mjs            应用图标（M4）
 build/                     打包图标（不进版本库）
+site/                      官网（M4，独立 package）
 ```
 
 ## 5. 数据层
@@ -255,9 +260,9 @@ CREATE TABLE settings (
 
 ### 5.4 文件存储
 
-- 原文件：`userData/books/<bookId>.<ext>`，导入时用流复制并同时计算 SHA-256，避免整本读进内存两次。
-- 封面：`userData/covers/<bookId>.jpg`，最长边 480 px，质量 80。
-- 删除书籍文件只在「彻底删除」时执行，且先删数据库行再删文件；文件删不掉时记日志，下次启动清理孤儿文件。
+- 原文件：`userData/books/<bookId>.<ext>`。M1 的实现是一次性 `readFile` 到内存，同一份字节用于算 SHA-256、解析元数据与写盘；单文件上限 200 MB，避免读两遍。超过 200 MB 直接拒绝。
+- 封面：`userData/covers/<bookId>.<原扩展名>`，M1 保存 EPUB 内原始图片字节，不做缩略图；书架按封面原始尺寸显示。缩放到 480 px 放到 M4 打包前评估。
+- 删除书籍文件只在「彻底删除」时执行；默认移除只写 `deleted_at`，文件保留，重新导入时按 SHA-256 找回标注。
 
 ## 6. 关键流程
 
@@ -265,34 +270,36 @@ CREATE TABLE settings (
 
 ```
 渲染层选择文件 → 主进程逐份处理
-  ├─ 计算 SHA-256（流式）
+  ├─ stat：空文件、非文件、超过 200 MB 直接拒绝
+  ├─ 按扩展名判断格式，不支持的返回 UNSUPPORTED
+  ├─ 一次性 readFile，计算 SHA-256
   ├─ 查 books.sha256；命中则返回 { status: 'duplicate', bookId }
   ├─ 按扩展名解析元数据
-  │    ├─ epub：读 META-INF/container.xml → OPF → title/creator/language/cover
+  │    ├─ epub：读 META-INF/container.xml → OPF → title/creator/cover
   │    ├─ md：front matter 的 title/author，否则第一个 `# 标题`，否则文件名
-  │    └─ txt：文件名
-  ├─ 复制到 books/<id>.<ext>
-  ├─ 提取封面（EPUB 取 OPF 中 properties="cover-image" 的条目）
-  ├─ INSERT books
+  │    └─ txt：文件名；编码按 UTF-8 → GBK 顺序探测
+  ├─ 写入 books/<id>.<ext>，有封面则写 covers/<id>.<ext>
+  ├─ INSERT books（失败时删掉刚写的文件）
   └─ 返回 { status: 'ok', book }
 ```
 
-整批导入逐个返回，渲染层边收边插卡片。任一本失败不影响其他本。
+整批导入逐个返回，渲染层汇总「导入 N 本 / M 本已在书库 / K 本失败」。一本坏书不影响其他本。
 
 限制：单文件 ≤ 200 MB，超过直接拒绝并说明；EPUB 必须含 `META-INF/container.xml` 与可解析 OPF，加密 EPUB 返回 `ENCRYPTED`。
 
 ### 6.2 打开一本书
 
 ```
-books:get(bookId)
-  ├─ 返回元数据 + 文件路径的读取句柄（不返回二进制）
-  ├─ EPUB：ipc 读取字节 → Blob → new ePub(blob)
-  ├─ markdown/txt：读取文本 → lib/convert 生成 Blob → new ePub(blob)
-  ├─ rendition.display(progress.locator?.cfi ? normalizeHref : 首章)
-  └─ 若 indexed_at 为空，阅读器空闲 2 秒后触发索引
+books:list / books:get(bookId)
+  ├─ 返回元数据与进度摘要（不返回二进制）
+  ├─ books:readFile(bookId) → ArrayBuffer
+  ├─ EPUB：ArrayBuffer → Blob → new ePub(blob)
+  ├─ markdown/txt：解码 → 章节切分 → 内存 EPUB Blob → new ePub(blob)
+  ├─ rendition.display(progress.locator?.cfi)（CFI 失效则退回首页）
+  └─ 首屏稳定 1.2 秒后生成 locations，校准百分比（索引进 M3）
 ```
 
-Markdown / TXT 的转换结果按 `bookId + updated_at` 缓存在内存，最多 3 本（与旧版策略一致）。
+Markdown / TXT 的转换结果按 `bookId` 缓存在内存，最多 3 本（`src/lib/convert/text-epub.ts`）。书内容不可变（每次导入都是新 id），因此不需要失效逻辑。
 
 ### 6.3 阅读进度
 
@@ -417,8 +424,10 @@ type Result<T> = Ok<T> | Err
 | `books:list` | `{ includeRemoved?: boolean }` | `Book[]` |
 | `books:get` | `{ id }` | `Book` |
 | `books:readFile` | `{ id }` | `ArrayBuffer` |
+| `books:readCover` | `{ id }` | `{ mime, data } \| null` |
 | `books:remove` | `{ id, purge?: boolean }` | `void` |
 | `books:touch` | `{ id }` | `void` |
+| `app:pickFiles` | — | `string[]` |
 | `progress:get` | `{ bookId }` | `Progress \| null` |
 | `progress:save` | `{ bookId, locator, percent, chapter }` | `void` |
 | `annotations:list` | `{ bookId }` | `Annotation[]` |
@@ -504,11 +513,11 @@ git tag v0.1.0 → GitHub Actions
 
 | 常量 | 值 | 位置 |
 | --- | --- | --- |
-| 应用版本 | `0.0.1`（M0 骨架），版本节奏见 PRD §1.2 | `package.json` |
+| 应用版本 | `0.0.2`（M1 导入与阅读），版本节奏见 PRD §1.2 | `package.json` |
 | 数据库 schema 版本 | `1` | `PRAGMA user_version` |
 | 单文件导入上限 | 200 MB | `electron/library/import.ts` |
-| 内存 EPUB 缓存数量 | 3 | `src/lib/convert/cache.ts` |
-| 进度写入防抖 | 400 ms | `src/reader/progress.ts` |
+| 内存 EPUB 缓存数量 | 3 | `src/lib/convert/text-epub.ts` |
+| 进度写入防抖 | 400 ms | `src/reader/ReaderView.tsx` |
 | 删除标注撤销窗口 | 5 s | `src/annotations/rail.tsx` |
 | 重锚相似度阈值 | 0.6 | `shared/locator.ts` |
 | quote 最大长度 | 500 字 | `shared/locator.ts` |

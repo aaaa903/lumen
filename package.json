@@ -1,6 +1,6 @@
 {
   "name": "lumen",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "description": "本地优先的阅读、标注与知识库桌面应用",
   "author": "TXY",
@@ -18,10 +18,14 @@
     "pack": "npm run build && electron-builder --win"
   },
   "dependencies": {
+    "epubjs": "^0.3.93",
+    "jszip": "^3.10.2",
+    "markdown-it": "^15.0.3",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
   "devDependencies": {
+    "@types/markdown-it": "^14.2.0",
     "@types/node": "^24.0.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
@@ -30,7 +34,6 @@
     "electron-builder": "^26.15.3",
     "electron-vite": "^6.0.0",
     "iconv-lite": "^0.6.3",
-    "jszip": "^3.10.2",
     "typescript": "^7.0.2",
     "vite": "^8.3.4",
     "vitest": "^3.2.4"
