@@ -1,4 +1,5 @@
 import initSql from './001_init.sql?raw'
+import pdfSql from './002_pdf.sql?raw'
 
 /**
  * 迁移清单。追加新脚本时只增不改，版本号连续递增。
@@ -12,4 +13,5 @@ export type Migration = {
 
 export const migrations: Migration[] = [
   { version: 1, name: '001_init', sql: initSql },
+  { version: 2, name: '002_pdf', sql: pdfSql },
 ]

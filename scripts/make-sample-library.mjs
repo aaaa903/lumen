@@ -1,5 +1,5 @@
 // 生成用于本地验证的测试书：node scripts/make-sample-library.mjs
-// 输出到 public/sample-library/（已 gitignore），覆盖 EPUB、Markdown、UTF-8 TXT、GBK TXT 与一本五十万字的长篇。
+// 输出到 public/sample-library/（已 gitignore），覆盖 EPUB、PDF、Markdown、UTF-8 TXT、GBK TXT 与一本五十万字的长篇。
 import { mkdir, readdir, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import JSZip from 'jszip'
@@ -237,10 +237,129 @@ function buildLongTxt() {
   return Buffer.from(parts.join('\n'), 'utf8')
 }
 
+/**
+ * PDF 文本串：ASCII 写括号，中文写成带 BOM 的 UTF-16BE 十六进制串。
+ * 只用于元数据与书签标题，正文用 Helvetica 渲染英文，避免嵌入字体。
+ */
+function pdfTextString(text) {
+  if (/^[\x20-\x7e]*$/.test(text)) {
+    return `(${text.replace(/[\\()]/g, (char) => `\\${char}`)})`
+  }
+  const hex = Buffer.from(`\uFEFF${text}`, 'utf16le').swap16().toString('hex').toUpperCase()
+  return `<${hex}>`
+}
+
+/** 手写一份六页、带三层书签的 PDF，用来验证导入、分页、目录与标注。 */
+function buildPdf() {
+  const pageCount = 6
+  const pages = Array.from({ length: pageCount }, (_, index) => {
+    const number = index + 1
+    const lines = [
+      `Page ${number} keeps one window open all night.`,
+      'A quiet room, a slow lamp, and a book left open on the table.',
+      'The lamp hums. The pages turn without any hurry at all.',
+      'Some sentences are worth reading three times, not because they are hard,',
+      'but because leaving them behind feels like a small loss.',
+      '',
+      'The rain outside is soft enough to be mistaken for breathing.',
+      'He folds the corner of the page and promises to come back tomorrow.',
+      '',
+      `This is sample page ${number} of ${pageCount}.`,
+    ]
+    return {
+      label: `第 ${number} 节 灯下`,
+      lines,
+    }
+  })
+
+  const pageIds = pages.map((_, index) => 5 + index)
+  const contentIds = pages.map((_, index) => 5 + pageCount + index)
+  const outlinesId = 5 + pageCount * 2
+  const outlineIds = pages.map((_, index) => outlinesId + 1 + index)
+
+  const objects = []
+  const setObject = (id, body) => {
+    objects[id - 1] = body
+  }
+
+  setObject(
+    1,
+    `<< /Type /Catalog /Pages 2 0 R /Outlines ${outlinesId} 0 R /PageMode /UseOutlines >>`,
+  )
+  setObject(
+    2,
+    `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(' ')}] /Count ${pageCount} >>`,
+  )
+  setObject(3, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>')
+  setObject(
+    4,
+    `<< /Title ${pdfTextString('流明 PDF 样本')} /Author ${pdfTextString('测试作者')} /Producer (Lumen) >>`,
+  )
+
+  pages.forEach((page, index) => {
+    const body = [
+      'BT',
+      '/F1 12 Tf',
+      '72 770 Td',
+      '22 TL',
+      ...page.lines.map((line) => {
+        const escaped = line.replace(/[\\()]/g, (char) => `\\${char}`)
+        return `(${escaped}) Tj T*`
+      }),
+      'ET',
+    ].join('\n')
+
+    setObject(
+      pageIds[index],
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentIds[index]} 0 R >>`,
+    )
+    setObject(
+      contentIds[index],
+      `<< /Length ${Buffer.byteLength(body, 'latin1')} >>\nstream\n${body}\nendstream`,
+    )
+  })
+
+  setObject(
+    outlinesId,
+    `<< /Type /Outlines /First ${outlineIds[0]} 0 R /Last ${outlineIds[outlineIds.length - 1]} 0 R /Count ${pageCount} >>`,
+  )
+  pages.forEach((page, index) => {
+    const id = outlineIds[index]
+    const next = index + 1 < pageCount ? ` /Next ${outlineIds[index + 1]} 0 R` : ''
+    const prev = index > 0 ? ` /Prev ${outlineIds[index - 1]} 0 R` : ''
+    setObject(
+      id,
+      `<< /Title ${pdfTextString(page.label)} /Parent ${outlinesId} 0 R${prev}${next} /Dest [${pageIds[index]} 0 R /Fit] >>`,
+    )
+  })
+
+  const header = '%PDF-1.7\n%\u00e2\u00e3\u00cf\u00d3\n'
+  const chunks = [Buffer.from(header, 'latin1')]
+  const offsets = []
+  let offset = chunks[0].length
+
+  objects.forEach((body, index) => {
+    const chunk = Buffer.from(`${index + 1} 0 obj\n${body}\nendobj\n`, 'latin1')
+    offsets.push(offset)
+    chunks.push(chunk)
+    offset += chunk.length
+  })
+
+  const xrefOffset = offset
+  const entries = ['0000000000 65535 f \n']
+  for (const item of offsets) entries.push(`${String(item).padStart(10, '0')} 00000 n \n`)
+  const trailer = `xref\n0 ${objects.length + 1}\n${entries.join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R /Info 4 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`
+  chunks.push(Buffer.from(trailer, 'latin1'))
+
+  return Buffer.concat(chunks)
+}
+
+
 await mkdir(OUT_DIR, { recursive: true })
 
 const outputs = [
   { name: '灯下漫读.epub', build: () => buildEpub(join(OUT_DIR, '灯下漫读.epub')) },
+  { name: '流明样本.pdf', build: async () => (await writeFile(join(OUT_DIR, '流明样本.pdf'), buildPdf())) ?? 0 },
   { name: '檐下笔记.md', build: async () => (await writeFile(join(OUT_DIR, '檐下笔记.md'), buildMarkdown(), 'utf8')) ?? 0 },
   { name: 'utf8-散文.txt', build: async () => (await writeFile(join(OUT_DIR, 'utf8-散文.txt'), buildTxt('utf8'))) ?? 0 },
   { name: 'gbk-旧文.txt', build: async () => (await writeFile(join(OUT_DIR, 'gbk-旧文.txt'), buildTxt('gbk'))) ?? 0 },

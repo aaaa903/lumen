@@ -28,7 +28,7 @@ export type IpcResult<T> =
   | { ok: true; data: T }
   | { ok: false; code: IpcErrorCode; message: string }
 
-export type BookFormat = 'epub' | 'markdown' | 'txt'
+export type BookFormat = 'epub' | 'markdown' | 'txt' | 'pdf'
 
 /** 书库里的书。filePath / coverPath 都是相对 userData 的路径。 */
 export type Book = {
@@ -41,6 +41,8 @@ export type Book = {
   size: number
   coverPath: string | null
   chapterCount: number
+  /** 仅 PDF 使用；打开一次后由阅读器回填。 */
+  pageCount: number
   indexedAt: number | null
   addedAt: number
   lastOpenedAt: number | null
@@ -234,6 +236,24 @@ export type SaveTextInput = {
   content: string
 }
 
+/** PDF 首次打开时回填元数据；只允许改 PDF，避免 EPUB 元数据被书内内容覆盖。 */
+export type UpdateBookMetaInput = {
+  id: string
+  title?: string
+  author?: string
+  pageCount?: number
+}
+
+export type LibraryExportResult = {
+  path: string
+  files: number
+}
+
+/** 后台索引窗口领取到的任务；为空表示队列暂时没有活。 */
+export type IndexerJob = {
+  bookId: string
+}
+
 /** 预加载暴露给渲染层的全部能力。新增通道时同步 electron/preload.ts 与 src/lib/api.ts。 */
 export type LumenApi = {
   versions: () => Promise<IpcResult<AppVersions>>
@@ -252,6 +272,8 @@ export type LumenApi = {
   getBook: (id: string) => Promise<IpcResult<ShelfBook>>
   readBookFile: (id: string) => Promise<IpcResult<ArrayBuffer>>
   readCover: (id: string) => Promise<IpcResult<{ mime: string; data: ArrayBuffer } | null>>
+  /** PDF 首次打开后回填标题、作者与页数。 */
+  updateBookMeta: (input: UpdateBookMetaInput) => Promise<IpcResult<ShelfBook>>
   removeBook: (id: string, purge?: boolean) => Promise<IpcResult<null>>
   touchBook: (id: string) => Promise<IpcResult<null>>
   getProgress: (bookId: string) => Promise<IpcResult<Progress | null>>
@@ -270,6 +292,15 @@ export type LumenApi = {
   indexBegin: (bookId: string) => Promise<IpcResult<null>>
   indexChunks: (bookId: string, chunks: IndexChunk[]) => Promise<IpcResult<null>>
   indexFinish: (bookId: string) => Promise<IpcResult<null>>
+  /** 请求后台索引；导入与打开未索引的书都会调用，主进程去重。 */
+  requestIndex: (bookId: string) => Promise<IpcResult<null>>
+  /** 后台索引窗口领取任务。 */
+  indexerNext: () => Promise<IpcResult<IndexerJob | null>>
+  /** 索引窗口被卸载或热更新时把任务还回队列。 */
+  indexerRelease: (bookId: string) => Promise<IpcResult<null>>
+  /** 后台索引窗口报告结果；主进程据此通知所有窗口刷新书架。 */
+  indexerComplete: (bookId: string, ok: boolean) => Promise<IpcResult<null>>
+  onIndexed: (callback: (bookId: string) => void) => () => void
   search: (input: SearchInput) => Promise<IpcResult<SearchHit[]>>
   listTags: () => Promise<IpcResult<Tag[]>>
   createTag: (name: string) => Promise<IpcResult<Tag>>
@@ -282,5 +313,7 @@ export type LumenApi = {
   saveNote: (input: SaveNoteInput) => Promise<IpcResult<Note>>
   deleteNote: (id: string) => Promise<IpcResult<null>>
   exportAnnotations: (input: ExportRequest) => Promise<IpcResult<ExportPayload>>
+  /** 整个书库按「一本书一个 Markdown」导出到用户选择的目录。 */
+  exportLibrary: () => Promise<IpcResult<LibraryExportResult | null>>
   saveText: (input: SaveTextInput) => Promise<IpcResult<{ path: string } | null>>
 }

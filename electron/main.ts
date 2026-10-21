@@ -5,6 +5,7 @@ import { extname, join, resolve, sep } from 'node:path'
 import { openDatabase, type Db } from './db/open'
 import { registerIpc } from './ipc/register'
 import { collectFileArgs, enqueueOpenFiles } from './ipc/open-files'
+import { createIndexer } from './indexer'
 import { installNetworkGuard } from './security/network'
 import { readWindowState, trackWindowState } from './window-state'
 
@@ -30,12 +31,15 @@ const CSP = [
   "font-src 'self'",
   "media-src 'self' blob:",
   "connect-src 'self'",
+  "worker-src 'self' blob:",
   "form-action 'none'",
   "frame-src 'none'",
   "base-uri 'none'",
 ].join('; ')
 
 let mainWindow: BrowserWindow | null = null
+/** 后台索引窗口单独记账：不参与 window-all-closed，也不接收索引完成通知。 */
+const workerWindows = new WeakSet<BrowserWindow>()
 
 // Windows 上窗口被完全遮挡时 Chromium 会暂停 requestAnimationFrame，而 epub.js 的渲染队列
 // 依赖 rAF，分页会永久停在「正在排版…」。backgroundThrottling 只挡住一部分节流，
@@ -83,11 +87,28 @@ function start(): void {
 
   registerLumenProtocol()
   installNetworkGuard({ devUrl: DEV_URL })
-  registerIpc(db, (paths) => {
-    if (!mainWindow || mainWindow.isDestroyed()) return
-    mainWindow.webContents.send('app:openFiles', paths)
+  const indexer = createIndexer({
+    db,
+    createWorker: createIndexerWindow,
+    notifyIndexed: (bookId) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (window.isDestroyed() || workerWindows.has(window)) continue
+        window.webContents.send('indexer:indexed', bookId)
+      }
+    },
   })
+  registerIpc(
+    db,
+    (paths) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return
+      mainWindow.webContents.send('app:openFiles', paths)
+    },
+    indexer,
+  )
   createWindow(db)
+  // 启动后补一遍历史遗留的未索引书；后台窗口空闲 20 秒会自动退出。
+  indexer.enqueueMissing()
+  app.on('before-quit', () => indexer.dispose())
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow(db)
@@ -125,6 +146,10 @@ function createWindow(db: Db): void {
 
   mainWindow.on('closed', () => {
     mainWindow = null
+    // 主窗口关掉就结束索引窗口，否则隐藏窗口会把进程多留 20 秒。
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (workerWindows.has(window) && !window.isDestroyed()) window.destroy()
+    }
   })
 
   // 外链只交给系统浏览器，应用内不允许打开第二个窗口或导航到其他源。
@@ -154,6 +179,41 @@ function createWindow(db: Db): void {
   }
 }
 
+/**
+ * 隐藏索引窗口：加载与主界面同一份渲染产物，靠 `?worker=index` 挂载后台任务组件。
+ * 这样索引复用 epub.js 的章节解析，主进程不需要自己实现 EPUB 文本抽取。
+ */
+function createIndexerWindow(): BrowserWindow {
+  const worker = new BrowserWindow({
+    width: 900,
+    height: 700,
+    show: false,
+    skipTaskbar: true,
+    title: 'Lumen 索引',
+    backgroundColor: '#f6f2ea',
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: PRELOAD_PATH,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webviewTag: false,
+      backgroundThrottling: false,
+      spellcheck: false,
+    },
+  })
+  workerWindows.add(worker)
+  worker.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  worker.webContents.on('will-navigate', (event) => event.preventDefault())
+
+  const target = DEV_URL ? new URL(DEV_URL) : new URL('lumen://app/index.html')
+  target.searchParams.set('worker', 'index')
+  void worker.loadURL(target.toString()).catch((error: unknown) => {
+    console.error('[Lumen] 索引窗口加载失败', error)
+  })
+  return worker
+}
+
 function registerLumenProtocol(): void {
   protocol.handle('lumen', async (request) => {
     const url = new URL(request.url)
@@ -177,7 +237,8 @@ function registerLumenProtocol(): void {
         'content-security-policy': CSP,
         'cache-control': 'no-store',
       },
-    })  })
+    })
+  })
 }
 
 function contentType(filePath: string): string {

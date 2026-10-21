@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import ePub from 'epubjs'
-import type { Book as EpubBook, Contents, Location, NavItem, Rendition } from 'epubjs'
+import type { Book as EpubBook, Contents, Location, Rendition } from 'epubjs'
 import type {
   Annotation,
   AnnotationColor,
@@ -20,8 +20,9 @@ import { HIGHLIGHT_COLORS } from '../annotations/colors'
 import { api } from '../lib/api'
 import { loadBookAsEpub } from '../lib/convert/text-epub'
 import { percentLabel } from '../lib/format'
-import { indexBook } from './indexer'
 import {
+  FLOW_LABEL,
+  FLOW_ORDER,
   FONT_MAX,
   FONT_MIN,
   FONT_STEP,
@@ -34,6 +35,7 @@ import {
   type ReaderPrefs,
 } from '../lib/prefs'
 import { applyReaderTheme, LINE_HEIGHT_KEYS, MARGIN_KEYS, READER_THEMES } from './theme'
+import { basename, flattenToc, normalizeHref, spineFallback } from './toc'
 import TocDrawer, { type TocEntry } from './TocDrawer'
 import { rangeFromOffsets, readSelection, type SelectionResult } from './selection'
 
@@ -52,43 +54,17 @@ type ReaderViewProps = {
   book: ShelfBook
   /** 从搜索或标注列表进入时要跳到的位置；为空则按上次进度续读。 */
   target: OpenTarget | null
-  onIndexed?: () => void
   onExit: () => void
 }
 
 const PROGRESS_DEBOUNCE_MS = 400
 
-function normalizeHref(href: string): string {
-  const clean = href.split('#')[0]
-  try {
-    return decodeURIComponent(clean)
-  } catch {
-    return clean
-  }
-}
+type ScrollableManager = { container?: HTMLElement }
 
-function basename(path: string): string {
-  return path.slice(path.lastIndexOf('/') + 1)
-}
-
-function flattenToc(items: NavItem[], depth = 0): TocEntry[] {
-  return items.flatMap((item) => [
-    { label: item.label.trim() || '未命名章节', href: normalizeHref(item.href), depth },
-    ...(item.subitems ? flattenToc(item.subitems, depth + 1) : []),
-  ])
-}
-
-/** 没有 nav 目录的 EPUB（不少 EPUB2 老书）退化成按 spine 顺序列章，上一章/下一章仍然可用。 */
-function spineFallback(book: EpubBook): TocEntry[] {
-  const items =
-    (book.spine as unknown as { spineItems?: Array<{ href?: string }> }).spineItems ?? []
-  return items
-    .map((item, index) => ({
-      label: `第 ${index + 1} 节`,
-      href: normalizeHref(item.href ?? ''),
-      depth: 0,
-    }))
-    .filter((entry) => entry.href.length > 0)
+/** epub.js 在滚动模式下把正文放在内部容器里；翻页要改这个容器的 scrollTop。 */
+function scrolledContainer(rendition: Rendition): HTMLElement | null {
+  const manager = (rendition as unknown as { manager?: ScrollableManager }).manager
+  return manager?.container ?? null
 }
 
 /**
@@ -274,7 +250,7 @@ async function flashSearchHit(
   }
 }
 
-export default function ReaderView({ book, target, onIndexed, onExit }: ReaderViewProps) {
+export default function ReaderView({ book, target, onExit }: ReaderViewProps) {
   const viewRef = useRef<HTMLDivElement | null>(null)
   const renditionRef = useRef<Rendition | null>(null)
   const tocRef = useRef<TocEntry[]>([])
@@ -300,8 +276,6 @@ export default function ReaderView({ book, target, onIndexed, onExit }: ReaderVi
   const editingIdRef = useRef<string | null>(null)
   const railOpenRef = useRef(false)
   const toastTimerRef = useRef<number | undefined>(undefined)
-  const onIndexedRef = useRef(onIndexed)
-  onIndexedRef.current = onIndexed
 
   const [prefs, setPrefs] = useState<ReaderPrefs>(readReaderPrefs)
   const [entries, setEntries] = useState<TocEntry[]>([])
@@ -328,6 +302,7 @@ export default function ReaderView({ book, target, onIndexed, onExit }: ReaderVi
   // 异步回调与 iframe 内监听器要读最新值，闭包里的 state 会是旧的。
   const prefsRef = useRef(prefs)
   prefsRef.current = prefs
+  const flowRef = useRef(prefs.flow)
   const bookRef = useRef(book)
   bookRef.current = book
   const tocOpenRef = useRef(tocOpen)
@@ -376,6 +351,27 @@ export default function ReaderView({ book, target, onIndexed, onExit }: ReaderVi
     const rendition = renditionRef.current
     if (!rendition) return
     setSelection(null)
+
+    if (prefsRef.current.flow === 'scrolled') {
+      const container = scrolledContainer(rendition)
+      if (container) {
+        const atBottom =
+          container.scrollTop + container.clientHeight >= container.scrollHeight - 12
+        const atTop = container.scrollTop <= 4
+        // 到章节底部再翻到下一节，否则只滚动一屏。
+        if (direction === 1 && atBottom) {
+          void rendition.next()
+          return
+        }
+        if (direction === -1 && atTop) {
+          void rendition.prev()
+          return
+        }
+        container.scrollBy({ top: direction * container.clientHeight * 0.88 })
+        return
+      }
+    }
+
     if (direction === 1) void rendition.next()
     else void rendition.prev()
   }, [])
@@ -592,12 +588,14 @@ export default function ReaderView({ book, target, onIndexed, onExit }: ReaderVi
 
       switch (event.key) {
         case 'ArrowRight':
+        case 'ArrowDown':
         case 'PageDown':
         case ' ':
           event.preventDefault()
           turnPage(1)
           break
         case 'ArrowLeft':
+        case 'ArrowUp':
         case 'PageUp':
           event.preventDefault()
           turnPage(-1)
@@ -763,7 +761,6 @@ export default function ReaderView({ book, target, onIndexed, onExit }: ReaderVi
     let epubBook: EpubBook | null = null
     let resizeTimer: number | undefined
     let locationsTimer: number | undefined
-    let indexTimer: number | undefined
 
     const resolveChapter = (href: string, index: number): TocEntry => {
       const target = normalizeHref(href)
@@ -800,7 +797,7 @@ export default function ReaderView({ book, target, onIndexed, onExit }: ReaderVi
         rendition = epubBook.renderTo(container, {
           width: '100%',
           height: '100%',
-          flow: 'paginated',
+          flow: prefsRef.current.flow === 'scrolled' ? 'scrolled-doc' : 'paginated',
           spread: 'none',
           allowScriptedContent: false,
         })
@@ -922,16 +919,10 @@ export default function ReaderView({ book, target, onIndexed, onExit }: ReaderVi
             })
         }
 
-        // 首次打开时在后台建全文索引；失败不影响阅读，下次打开会重试。
-        indexTimer = window.setTimeout(() => {
-          if (disposed || !epubBook) return
-          if (bookRef.current.indexedAt !== null) return
-          void indexBook(epubBook, bookRef.current, tocRef.current, () => disposed).then(
-            (done) => {
-              if (done && !disposed) onIndexedRef.current?.()
-            },
-          )
-        }, 2500)
+        // 索引统一交给隐藏窗口；这里只排队，避免前台阅读器和后台任务重复写同一本书。
+        if (bookRef.current.indexedAt === null && bookRef.current.format !== 'pdf') {
+          void api.requestIndex(bookRef.current.id)
+        }
 
         // 章节定位表比较耗时，等首屏稳定后在后台生成，只用于更精确的百分比。
         locationsTimer = window.setTimeout(() => {
@@ -987,7 +978,6 @@ export default function ReaderView({ book, target, onIndexed, onExit }: ReaderVi
       disposed = true
       window.clearTimeout(resizeTimer)
       window.clearTimeout(locationsTimer)
-      window.clearTimeout(indexTimer)
       window.clearTimeout(saveTimerRef.current)
       window.clearTimeout(toastTimerRef.current)
       observer.disconnect()
@@ -1042,6 +1032,21 @@ export default function ReaderView({ book, target, onIndexed, onExit }: ReaderVi
     const timer = window.setTimeout(() => refreshPageInfo(rendition), 240)
     return () => window.clearTimeout(timer)
   }, [prefs, refreshPageInfo])
+
+  // 切换分页/滚动：epub.js 会重排并回到当前位置；页码只在分页模式有意义。
+  useEffect(() => {
+    if (flowRef.current === prefs.flow) return
+    flowRef.current = prefs.flow
+    const rendition = renditionRef.current
+    if (!rendition) return
+    try {
+      rendition.flow(prefs.flow === 'scrolled' ? 'scrolled-doc' : 'paginated')
+      const timer = window.setTimeout(() => refreshPageInfo(rendition), 260)
+      return () => window.clearTimeout(timer)
+    } catch (error) {
+      console.warn('[Lumen] 切换阅读模式失败', error)
+    }
+  }, [prefs.flow, refreshPageInfo])
 
   const updatePrefs = (patch: Partial<ReaderPrefs>) => {
     setPrefs((current) => ({ ...current, ...patch }))
@@ -1213,6 +1218,22 @@ export default function ReaderView({ book, target, onIndexed, onExit }: ReaderVi
             </div>
 
             <div className="setting-row">
+              <span className="setting-label">翻页方式</span>
+              <div className="setting-group">
+                {FLOW_ORDER.map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={`setting-btn ${prefs.flow === key ? 'is-active' : ''}`}
+                    onClick={() => updatePrefs({ flow: key })}
+                  >
+                    {FLOW_LABEL[key]}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="setting-row">
               <span className="setting-label">配色</span>
               <div className="setting-group">
                 {THEME_ORDER.map((key) => (
@@ -1308,7 +1329,7 @@ export default function ReaderView({ book, target, onIndexed, onExit }: ReaderVi
           <div className="progress-fill" style={{ width: `${Math.max(1, percent * 100)}%` }} />
         </div>
         <span className="progress-text">{percentLabel(percent)}</span>
-        {pageInfo.total > 0 && (
+        {prefs.flow === 'paginated' && pageInfo.total > 0 && (
           <span className="page-text">
             第 {pageInfo.current} / {pageInfo.total} 页
           </span>

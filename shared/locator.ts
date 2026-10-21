@@ -156,7 +156,7 @@ export function findBestQuote(
   return best.score >= ANCHOR_THRESHOLD ? best : null
 }
 
-const FORMATS: BookFormat[] = ['epub', 'markdown', 'txt']
+const FORMATS: BookFormat[] = ['epub', 'markdown', 'txt', 'pdf']
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)

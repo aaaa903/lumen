@@ -100,9 +100,27 @@ describe('parseLocator', () => {
     expect(parsed?.quote).toBe('灯下')
   })
 
+  it('接受 PDF 的页码定位，cfi 为空', () => {
+    const parsed = parseLocator({
+      format: 'pdf',
+      cfi: null,
+      href: 'page-12',
+      chapterIndex: 11,
+      chapterTitle: '第 12 页',
+      page: 12,
+      percent: 0.5,
+      quote: 'A quiet room keeps one window open all night.',
+      prefix: '',
+      suffix: '',
+    })
+    expect(parsed?.format).toBe('pdf')
+    expect(parsed?.cfi).toBeNull()
+    expect(parsed?.page).toBe(12)
+  })
+
   it('缺 href 或格式不认识时返回 null', () => {
     expect(parseLocator({ format: 'epub', cfi: 'x' })).toBeNull()
-    expect(parseLocator({ format: 'pdf', href: 'a.xhtml' })).toBeNull()
+    expect(parseLocator({ format: 'mobi', href: 'a.xhtml' })).toBeNull()
     expect(parseLocator(null)).toBeNull()
   })
 })

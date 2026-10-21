@@ -1,10 +1,10 @@
 import { app, dialog } from 'electron'
-import { writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
-import type { ExportPayload } from '../../shared/types'
+import type { ExportPayload, LibraryExportResult } from '../../shared/types'
 import { buildAnnotationsMarkdown } from '../../shared/export'
 import type { Db } from '../db/open'
-import { getShelfBook } from '../db/repositories/books'
+import { getShelfBook, listShelf } from '../db/repositories/books'
 import { listAnnotations } from '../db/repositories/annotations'
 import { handle, IpcError, ok, readObject, readString } from './handle'
 
@@ -14,6 +14,25 @@ const MAX_EXPORT_LENGTH = 20_000_000
 function safeFileName(input: string): string {
   const name = basename(input).replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_').trim()
   return name.length > 0 ? name : 'Lumen-标注.md'
+}
+
+/** 同一本书名可能重复，导出时追加序号，不覆盖已经写出的文件。 */
+function uniqueName(base: string, used: Set<string>): string {
+  let candidate = `${base}.md`
+  let index = 2
+  while (used.has(candidate.toLowerCase())) {
+    candidate = `${base} (${index}).md`
+    index += 1
+  }
+  used.add(candidate.toLowerCase())
+  return candidate
+}
+
+function exportFolderName(now: Date): string {
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return `Lumen-标注-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(
+    now.getHours(),
+  )}${pad(now.getMinutes())}`
 }
 
 export function registerExportIpc(db: Db): void {
@@ -33,6 +52,43 @@ export function registerExportIpc(db: Db): void {
 
     const markdown = buildAnnotationsMarkdown(book, selected, app.getVersion())
     return ok({ markdown, count: selected.length })
+  })
+
+  /**
+   * 整个书库的标注导出：用户选一个目录，应用在其中新建带时间戳的子目录，
+   * 一本书一个 Markdown。没有标注的书不落文件，避免导出几百个空文件。
+   */
+  handle<LibraryExportResult | null>('export:library', async () => {
+    const result = await dialog.showOpenDialog({
+      title: '导出整个书库的标注',
+      buttonLabel: '导出到此目录',
+      properties: ['openDirectory', 'createDirectory'],
+    })
+    if (result.canceled || result.filePaths.length === 0) return ok(null)
+
+    const target = join(result.filePaths[0] ?? app.getPath('documents'), exportFolderName(new Date()))
+    const books = listShelf(db)
+    const used = new Set<string>()
+    let files = 0
+
+    try {
+      await mkdir(target, { recursive: true })
+      for (const book of books) {
+        const annotations = listAnnotations(db, book.id)
+        if (annotations.length === 0) continue
+        const markdown = buildAnnotationsMarkdown(book, annotations, app.getVersion())
+        const name = uniqueName(safeFileName(book.title).replace(/\.md$/i, ''), used)
+        await writeFile(join(target, name), markdown, 'utf8')
+        files += 1
+      }
+    } catch (error) {
+      throw new IpcError(
+        'IO_ERROR',
+        `导出没有完成：${error instanceof Error ? error.message : '未知错误'}。请换一个目录再试。`,
+      )
+    }
+
+    return ok({ path: target, files })
   })
 
   handle<{ path: string } | null>('app:saveText', async (payload) => {

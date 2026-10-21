@@ -22,6 +22,7 @@ export default function SettingsDialog({
   const [copied, setCopied] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
   const [clearing, setClearing] = useState(false)
+  const [exporting, setExporting] = useState(false)
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
@@ -46,6 +47,21 @@ export default function SettingsDialog({
     const result = await api.openUserData()
     if (result.ok) onNotice('已在资源管理器中打开数据目录。')
     else onError(result.message)
+  }
+
+  const exportLibrary = async (): Promise<void> => {
+    setExporting(true)
+    try {
+      const result = await api.exportLibrary()
+      if (!result.ok) {
+        onError(result.message)
+        return
+      }
+      if (!result.data) return
+      onNotice(`已导出 ${result.data.files} 本书的标注到 ${result.data.path}`)
+    } finally {
+      setExporting(false)
+    }
   }
 
   const clearData = async (): Promise<void> => {
@@ -105,6 +121,24 @@ export default function SettingsDialog({
             <dt>数据库 schema</dt>
             <dd>{versions ? `v${versions.schema}` : '—'}</dd>
           </dl>
+        </section>
+
+        <section className="settings-section">
+          <h3>导出</h3>
+          <p className="settings-hint">
+            把书库里每本书的标注导出为单独的 Markdown 文件，按书名命名，可直接放进 Obsidian 或
+            Typora。没有标注的书不会生成空文件。
+          </p>
+          <div className="settings-actions">
+            <button
+              type="button"
+              className="ghost-btn"
+              onClick={() => void exportLibrary()}
+              disabled={exporting}
+            >
+              {exporting ? '正在导出…' : '导出全部标注…'}
+            </button>
+          </div>
         </section>
 
         <section className="settings-section">

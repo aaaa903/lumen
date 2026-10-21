@@ -4,11 +4,11 @@
 
 ## 项目是什么
 
-Lumen：本地优先的阅读、标注与知识库桌面应用（Windows，Electron）。导入 EPUB / Markdown / TXT，阅读、高亮、批注、书签，跨书全文搜索，导出 Markdown。
+Lumen：本地优先的阅读、标注与知识库桌面应用（Windows，Electron）。导入 EPUB / PDF / Markdown / TXT，阅读、高亮、批注、书签，跨书全文搜索，导出 Markdown。
 
 无账号、无云端、零网络请求。产品边界见 [PRD.md](./PRD.md)，实现细节见 [TECH_DESIGN.md](./TECH_DESIGN.md)。
 
-当前状态：**M4 已发布（`0.1.0`，2026-10-21）**——导入 EPUB / Markdown / TXT、书架、epub.js 分页、目录、进度续读、排版与配色、高亮批注书签、侧栏、重锚、跨书全文搜索、标签、独立笔记、导出 Markdown、打包与官网均可用。仓库 https://github.com/aaaa903/lumen ，Release v0.1.0 提供 setup 与 portable，官网 https://aaaa903.github.io/lumen/ 。推送 `v*` 标签即走完整发布流水线。动手前先看 `docs/IMPLEMENTATION_PROMPT.md` 的里程碑顺序；V1（0.2.0，PDF 等）尚未开始。
+当前状态：**V1 已发布（`0.2.0`，2026-10-22）**——在 0.1.0 的基础上增加 PDF 阅读与标注、滚动阅读模式、导入即后台索引、整个书库的标注导出。仓库 https://github.com/aaaa903/lumen ，Release v0.2.0 提供 setup 与 portable，官网 https://aaaa903.github.io/lumen/ 。推送 `v*` 标签即走完整发布流水线。下一步（书内搜索、双向引用、macOS）尚未开始。
 
 ## 命令
 
@@ -25,7 +25,8 @@ npm run release:assets # 回填产物大小与 SHA-256 到 site/src/data/release
 npm run release:notes  # 由 releases.json 生成 Release 说明
 npm run site:build # 生成官网到 site/dist/
 npm run db:inspect # 只读打开当前用户数据目录下的 lumen.db，排查数据用
-node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字）
+node scripts/make-sample-library.mjs   # 生成 6 本测试书（含 PDF 与 50 万字长篇）
+node scripts/copy-pdfjs-assets.mjs     # 单独补 public/pdfjs/（predev / prebuild 会自动跑）
 ```
 
 调试渲染层：先设 `LUMEN_DEBUG_PORT=9223`（PowerShell 用 `$env:LUMEN_DEBUG_PORT='9223'`）再 `npm run dev`，然后通过 CDP 连 `http://127.0.0.1:9223/json/list` 检查页面与数据库状态。需要隔离数据时设 `LUMEN_USER_DATA=<临时目录>`，不要在调试清空、迁移这类操作时动真实书库。仓库内的 `scripts/cdp-eval.mjs` 可执行一小段渲染层表达式：把表达式写进临时文件，运行 `node scripts/cdp-eval.mjs <文件>`；`cdp-console.mjs` 收集控制台输出，`cdp-front.mjs` 截取页面。临时脚本不要提交。
@@ -38,10 +39,12 @@ node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字�
 | --- | --- | --- |
 | `electron/main.ts` | 窗口、单实例、`lumen://` 协议、网络拦截接线 | 改桌面行为；不放业务逻辑 |
 | `electron/window-state.ts` | 窗口尺寸、位置、最大化的记忆与写回 | 改窗口行为 |
+| `electron/indexer.ts` | 索引队列、隐藏窗口生命周期、任务租约与重试 | 改索引调度 |
+| `electron/ipc/indexer.ts` | 后台索引窗口的任务通道（领取 / 归还 / 完成） | 改索引协议 |
 | `electron/preload.ts` | `contextBridge` 白名单 | 新增 IPC 通道时必须同步 |
 | `electron/ipc/*.ts` | 通道注册、参数校验、错误包装；`open-files.ts` 处理「用 Lumen 打开」与第二实例转交 | 改接口契约（同时改 `shared/types.ts`） |
 | `electron/db/open.ts` | 打开数据库、PRAGMA、迁移执行、备份 | 改 schema 版本或迁移策略 |
-| `electron/db/migrations/*.sql` | 迁移脚本，只增不改 | 加表、加列、加索引 |
+| `electron/db/migrations/*.sql` | 迁移脚本，只增不改；`002_pdf.sql` 重建 `books` 支持 PDF | 加表、加列、加索引 |
 | `electron/db/repositories/*.ts` | 全部 SQL（`books` / `progress` / `annotations` / `search` / `tags` / `notes` / `settings`） | 改查询；不要把 SQL 写到别处 |
 | `electron/library/import.ts` | 导入编排：一次性读取、SHA-256、去重、写文件、元数据、封面 | 改导入流程 |
 | `electron/library/paths.ts` | 相对 userData 的路径解析与越界防护 | 改文件落点 |
@@ -53,7 +56,10 @@ node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字�
 | `shared/locator.ts` | locator 的生成、校验、重锚打分 | 改标注定位（必须加单测） |
 | `shared/search-query.ts` | MATCH / LIKE 参数生成、片段截取 | 改搜索（必须加单测） |
 | `shared/export.ts` | 标注 → Markdown 的纯函数 | 改导出格式 |
-| `src/reader/*` | epub.js 生命周期、分页、目录、主题、进度、索引器 | 改阅读体验 |
+| `src/reader/*` | epub.js 生命周期、分页与滚动、目录、主题、进度、索引循环 | 改阅读体验 |
+| `src/reader/PdfViewer.tsx` | pdf.js 渲染、缩放、页码进度、PDF 目录与标注 | 改 PDF 阅读（唯一允许碰 `pdfjs-dist` 的地方） |
+| `src/reader/IndexWorker.tsx` | 隐藏窗口里的索引循环，领任务 → 建索引 → 回报 | 改后台索引行为 |
+| `src/reader/toc.ts` | 目录 href 归一化、递归展平、spine 兜底 | 改目录解析 |
 | `src/annotations/*` | 选中工具条、高亮渲染、侧栏、批注编辑器 | 改标注交互 |
 | `src/library/*` | 书架网格、导入入口、移除确认 | 改书架呈现 |
 | `src/settings/SettingsDialog.tsx` | 数据目录、版本信息、清空数据 | 改设置项（不要新增一级入口） |
@@ -64,11 +70,12 @@ node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字�
 | `scripts/release-assets.mjs` | 计算产物 SHA-256、写 `SHA256SUMS.txt`、回填 `releases.json` | 改发布流程或产物命名 |
 | `scripts/release-notes.mjs` | 由 `releases.json` 生成 Release 说明 | 改发布文案 |
 | `scripts/collect-desktop.mjs` | 只复制当前版本产物到 `desktop-dist/` | 改产物目录或命名 |
+| `scripts/copy-pdfjs-assets.mjs` | 把 pdf.js 的 cMap 与标准字体复制到 `public/pdfjs/` | 升级 `pdfjs-dist` 后确认资源仍在 |
 | `site/` | 官网：`build.mjs` 零依赖生成静态页，`src/` 放样式、脚本与截图，`src/data/releases.json` 是唯一数据源 | 改官网；不要引入框架或外部资源 |
 | `.github/workflows/` | `release.yml`（打标签发布）、`site.yml`（只改官网时部署） | 改 CI |
 | `docs/` | 实施提示词与官网提示词 | 改交付方式 |
 
-约定：组件不直接调 `window.lumen`；`node:sqlite` 不出现在 `src/`；`epub.js` 只出现在 `src/reader/`；书内 XHTML 拼接只出现在 `src/lib/convert/`。
+约定：组件不直接调 `window.lumen`；`node:sqlite` 不出现在 `src/`；`epub.js` 只在 `src/reader/`；`pdfjs-dist` 只在 `PdfViewer.tsx`；书内 XHTML 拼接只出现在 `src/lib/convert/`。
 
 ## 硬性约定
 
@@ -84,7 +91,8 @@ node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字�
 
 ## 数据层规则
 
-- schema 变更必须：新建 `migrations/NNN_*.sql` + 提升 `PRAGMA user_version` + 在 `docs` 与本文同步。老数据兼容优先，宁加列不删列。
+- schema 变更必须：新建 `migrations/NNN_*.sql` + 提升 `PRAGMA user_version` + 在 `docs` 与本文同步。老数据兼容优先，宁加列不删列。当前版本为 `2`（`002_pdf` 给 `books` 加 `page_count` 并把 `format` 枚举扩到 `pdf`）。
+- 需要重建表的迁移：在事务外先 `PRAGMA foreign_keys = OFF`，迁移后立即恢复并跑 `PRAGMA foreign_key_check`，否则 `DROP TABLE` 会级联清空子表。
 - 迁移前自动备份数据库到 `userData/backups/`，保留最近 3 份。
 - 读路径默认过滤 `deleted_at IS NOT NULL` 的行；软删是默认，物理删除只发生在「彻底删除」与文件清理。
 - 所有写事务走 `withTransaction(db, fn)`（`electron/db/open.ts`）；不要在业务代码里散落 `BEGIN` / `COMMIT`。
@@ -93,7 +101,10 @@ node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字�
 - 删书分两种：`books:remove({ purge: false })` 只写 `deleted_at`，标注与笔记保留；`purge: true` 才级联删除并删源文件。
 - 书籍原文件不存进数据库，只存相对路径；读写路径不要整本读进内存（除 epub.js 需要的 Blob）。
 - 进度写入必须防抖（400 ms）并 `flush` 后再退出阅读器，否则最后一次翻页丢失。
-- 新增 `localStorage` key 用 `lumen:` 前缀，并在 TECH_DESIGN §12 登记。
+- 新增 `localStorage` key 用 `lumen:` 前缀，并在 TECH_DESIGN §12 登记（V1 新增 `lumen:reader-flow`）。
+- PDF 的标题 / 作者 / 页数由渲染层回填，只允许 `updatePdfMeta` 改 `format = 'pdf'` 的行；EPUB 元数据不能被覆盖。
+- 索引只由 `electron/indexer.ts` 排队，不要在阅读器里直接调 `search:indexBegin`；导入成功、打开未索引的书、启动扫描是仅有的三个入口。
+- 索引用 `indexed_at` 表示状态；PDF 导入即写时间戳，其余书等 `indexer:complete(ok=true)` 才写。
 
 ## 使用 epub.js 的硬约束（旧版踩过的坑，仍然适用）
 
@@ -111,6 +122,22 @@ node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字�
 | TXT / Markdown 必须经内存 EPUB 转换，不能把原始字节交给 `ePub()` | 原始字节不是 ZIP，epub.js 会一直等不到 `book.ready` |
 | Electron 的 `webPreferences.backgroundThrottling` 必须为 `false` | 窗口被遮挡时 `requestAnimationFrame` 暂停，分页永远停在「正在排版…」 |
 
+## PDF 与后台索引的硬约束
+
+| 规则 | 原因 |
+| --- | --- |
+| `pdfjs-dist` 只允许出现在 `PdfViewer.tsx` | 主进程不解析 PDF；其他组件要元数据走 `books:updateMeta` |
+| pdf.js 的 worker 必须由 Vite 打包并用 `?url` 引入 | 直接写 CDN 地址会触发网络拦截；CSP 的 `worker-src 'self' blob:` 不能删 |
+| `cMapUrl` / `standardFontDataUrl` 指向 `pdfjs/` 相对路径 | 资源由 `copy-pdfjs-assets.mjs` 复制进 `public/pdfjs/`；缺失会导致中文方块、取不到文字 |
+| PDF 标注只存页码 + `quote`，不存矩形 | 矩形随缩放和窗口宽度变化；每次渲染按文字层重新查找 |
+| `PDF_RESOURCE_BASE` 用 `new URL('pdfjs/', document.baseURI)` | `lumen://app/` 与开发服务器的基路径不同，写死 `/pdfjs/` 会在打包后 404 |
+| 换页宽时先 `task.cancel()` 再清空 `rendered` 缓存 | 不取消会接着往已移除的 canvas 上画，抛 `RenderingCancelledException` |
+| 索引任务必须带租约，窗口关闭/卸载要 `indexer:release` | StrictMode 双跑与 HMR 会销毁窗口；不归还会让书永远「未索引」 |
+| 索引窗口加载 `?worker=index`，不要单独写一份 HTML | 复用同一份渲染产物与 preload；两份入口会漂移 |
+| 索引窗口不参与 `window-all-closed` 的界面通知 | 主进程用 `WeakSet` 区分；主窗口关闭时立即 `destroy()` 隐藏窗口 |
+| PDF 不进入索引队列 | pdf.js 在主进程不可用；`indexedAt` 导入时直接写，避免书架永远「未索引」 |
+| 迁移重建表时事务外关外键，结束立即恢复并 `foreign_key_check` | 否则 `DROP TABLE books` 会按 CASCADE 清空标注与进度 |
+
 ## 标注相关的硬约束
 
 - 一条标注必须同时写 `cfi` 与 `quote` / `prefix` / `suffix`；`cfi` 允许为 `null`（书签），不允许「有 cfi 无 quote」的高亮。
@@ -125,6 +152,10 @@ node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字�
 - [ ] `npm test` 通过
 - [ ] `npm run build` 成功
 - [ ] 手测：导入 → 打开 → 翻 3 页 → 高亮 → 写批注 → 返回 → 重启回到同位置且高亮仍在
+- [ ] 若改了 PDF：导入带书签的 PDF → 首次打开回填标题作者页数 → 滚到第 3 页 → 高亮 → 重启仍在；缩放 60% 与 220% 不裁切
+- [ ] 若改了滚动模式：切到滚动 → 翻一屏 → 章底进下一章 → 切回分页位置不丢
+- [ ] 若改了索引：导入一本从未打开的书 → 等「未索引」消失 → 搜索命中；关窗再启动能补建历史书
+- [ ] 若改了导出：单书导出与「导出全部标注」内容一致，重名文件不覆盖
 - [ ] 若改了标注定位：跑一次「外部改写文件后重锚」场景
 - [ ] 若改了搜索：测两字中文、英文单词、含引号查询、空结果
 - [ ] 若改了数据模型：旧库可迁移，或写清楚不兼容与迁移方式
@@ -142,10 +173,14 @@ node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字�
 | `npm install` 卡在下载 Electron | 设置 `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/` 后执行 `node node_modules/electron/install.js` |
 | 数据库写入报 `SQLITE_BUSY` | 有第二个进程占用；确认单实例锁生效，检查是否遗留的 dev 窗口 |
 | 搜索中文无结果 | 确认 `search_chunks` 有数据（`books.indexed_at` 非空）、FTS 表存在、查询长度 < 3 时走了 LIKE 分支 |
-| 标注位置漂移 | 看该条 `quote` 是否为空、`orphaned` 是否为 1，重锚打分是否低于 0.6 |
+| 标注位置漂移 | 看该条 `quote` 是否为空、`orphaned` 是否为 1，重锚打分是否低于 0.6；PDF 标注还看页码是否越界 |
+| PDF 页面空白 | 确认 `public/pdfjs/` 已生成；看控制台是否拒绝加载 `pdf.worker.min-*.mjs`（CSP `worker-src`） |
+| PDF 中文显示方块 | `cMapUrl` 是否指向 `pdfjs/cmaps/`，`copy-pdfjs-assets.mjs` 是否在 `predev` / `prebuild` 里跑过 |
+| 书架一直显示「未索引」 | 看是否有隐藏索引窗口（`?worker=index`）；确认 `indexer:next` 有返回、租约 180 s 未反复超时，必要时重启应用补建 |
+| 升级后标注与进度全没了 | 迁移重建 `books` 时外键没关，`DROP TABLE` 级联清了子表；恢复备份并修迁移执行器 |
 | 打包后白屏 | 检查 `lumen://` 协议的路径解析与 `dist/renderer` 是否存在 |
 | 窗口缩小时正文被裁 | 检查 `rendition.resize` 是否传了显式尺寸、`ResizeObserver` 是否还在 |
-| 打包报 `EPERM/EBUSY: rename/unlink` | 输出目录或 `.asar` 被编辑器/杀毒/索引服务占用：关闭正在运行的应用；中间产物放在项目同级 `../lumen-desktop-build/` |
+| 打包报 `EPERM/EBUSY: rename/unlink` | 输出目录或 `.asar` 被编辑器/杀毒/索引服务占用：关闭正在运行的应用；中间产物放在项目同级 `../lumen-next-desktop-build/` |
 | 打包报 `spawn UNKNOWN`（NSIS 阶段） | 本机智能应用控制拦截了 electron-builder 用于导出卸载器的临时 exe：改用 `npm run pack:portable`，正式安装包交给 CI |
 | 官网下载按钮 404 | `site/site.config.json` 的 `owner` 是否填对；CI 用 `GITHUB_REPOSITORY` 覆盖。Release 资产名必须与 `releases.json` 一致 |
 | 官网构建报「资产信息不完整」 | `releases.json` 缺少 `size` / `sha256`：先跑 `npm run release:assets`，或等发布工作流回填 |
@@ -160,10 +195,12 @@ node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字�
 - 不要加后端、账号、云同步、遥测、崩溃上报、自动更新。
 - 不要引入外部字体、CDN、在线词典、AI 接口。
 - 不要自研 EPUB 解析或重写分页引擎。
-- 不要为了做 PDF 而提前抽象「通用文档模型」；V1 再说。
+- 不要在渲染层自己解析 PDF 或引入第二个 PDF 库；也不要给 PDF 做 OCR 或全文索引，方案未定。
+- 不要为索引另起一份 HTML 入口或在主进程解析 EPUB；复用隐藏窗口与 `?worker=index`。
+- 不要为了「通用文档模型」提前抽象；PDF 与 EPUB 各自一条渲染链路。
 - 不要在渲染层加载 `node:sqlite`，也不要开 `nodeIntegration`、关 `contextIsolation`。
 - 不要把业务逻辑塞进 `electron/main.ts`。
-- 不要把 `dist/`、`desktop-dist/`、`site/dist/`、`release-notes.md`、`../lumen-desktop-build/`、`build/icon.*`、`node_modules/`、`public/sample-library/` 提交进版本库。
+- 不要把 `dist/`、`desktop-dist/`、`site/dist/`、`release-notes.md`、`../lumen-next-desktop-build/`、`build/icon.*`、`node_modules/`、`public/sample-library/`、`public/pdfjs/` 提交进版本库。
 - 不要在没有单测的情况下改 `shared/locator.ts` 或搜索转义逻辑。
 
 ## 文档同步规则

@@ -1,10 +1,12 @@
 import { app, shell } from 'electron'
 import type { AppVersions } from '../../shared/types'
+import type { Indexer } from '../indexer'
 import { getSchemaVersion, type Db } from '../db/open'
 import { registerBookIpc } from './books'
 import { registerAnnotationIpc } from './annotations'
 import { registerExportIpc } from './export'
 import { fail, handle, ok, readObject, readString } from './handle'
+import { registerIndexerIpc } from './indexer'
 import { registerNoteIpc } from './notes'
 import { registerMaintenanceIpc } from './maintenance'
 import { registerOpenFileIpc } from './open-files'
@@ -13,7 +15,11 @@ import { registerSearchIpc } from './search'
 import { registerTagIpc } from './tags'
 
 /** 统一注册 IPC。每个通道只做参数校验与转发，业务逻辑留在 repositories 或 library。 */
-export function registerIpc(db: Db, sendOpenFiles: (paths: string[]) => void): void {
+export function registerIpc(
+  db: Db,
+  sendOpenFiles: (paths: string[]) => void,
+  indexer: Indexer,
+): void {
   handle<AppVersions>('app:versions', () => {
     const row = db.prepare('SELECT sqlite_version() AS version').get() as { version: string }
     return ok({
@@ -52,7 +58,8 @@ export function registerIpc(db: Db, sendOpenFiles: (paths: string[]) => void): v
 
   registerOpenFileIpc(sendOpenFiles)
   registerMaintenanceIpc(db)
-  registerBookIpc(db)
+  registerBookIpc(db, indexer)
+  registerIndexerIpc(db, indexer)
   registerProgressIpc(db)
   registerAnnotationIpc(db)
   registerSearchIpc(db)

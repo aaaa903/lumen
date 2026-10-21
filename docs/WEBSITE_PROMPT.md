@@ -11,8 +11,8 @@
 ## 产品事实（写文案时以这些为准，不要编造）
 
 - Lumen：Windows 桌面应用，本地优先的阅读、标注与知识库
-- 支持导入 EPUB、Markdown、TXT；PDF 在下一个版本
-- 功能：分页阅读、目录、进度续读、高亮、批注、书签、跨书全文搜索、标签、独立笔记、导出 Markdown
+- 支持导入 EPUB、PDF、Markdown、TXT
+- 功能：分页与滚动阅读、PDF 按页渲染、目录、进度续读、高亮、批注、书签、导入即后台索引、跨书全文搜索、标签、独立笔记、单书与整库导出 Markdown
 - 完全离线：无账号、无云同步、无遥测、无自动更新检查
 - 数据位置：`%APPDATA%/Lumen`，卸载不删除
 - 免费、开源，MIT 许可
@@ -45,23 +45,23 @@
 
 ```json
 {
-  "latest": "0.1.0",
+  "latest": "0.2.0",
   "releases": [
     {
-      "version": "0.1.0",
-      "tag": "v0.1.0",
-      "date": "2026-11-10",
-      "notes": ["首个版本：EPUB / Markdown / TXT 阅读", "高亮与批注", "跨书搜索"],
+      "version": "0.2.0",
+      "tag": "v0.2.0",
+      "date": "2026-10-22",
+      "notes": ["新增 PDF 阅读与标注", "分页与滚动模式", "导入即后台索引", "整库导出标注"],
       "assets": {
         "setup": {
-          "name": "Lumen-0.1.0-setup.exe",
-          "url": "https://github.com/<owner>/lumen/releases/download/v0.1.0/Lumen-0.1.0-setup.exe",
+          "name": "Lumen-0.2.0-setup.exe",
+          "url": "https://github.com/<owner>/lumen/releases/download/v0.2.0/Lumen-0.2.0-setup.exe",
           "size": 118000000,
           "sha256": "…"
         },
         "portable": {
-          "name": "Lumen-0.1.0-portable.zip",
-          "url": "https://github.com/<owner>/lumen/releases/download/v0.1.0/Lumen-0.1.0-portable.zip",
+          "name": "Lumen-0.2.0-portable.zip",
+          "url": "https://github.com/<owner>/lumen/releases/download/v0.2.0/Lumen-0.2.0-portable.zip",
           "size": 140000000,
           "sha256": "…"
         }

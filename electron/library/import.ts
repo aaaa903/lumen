@@ -18,12 +18,14 @@ const FORMATS: Record<string, BookFormat> = {
   '.md': 'markdown',
   '.markdown': 'markdown',
   '.txt': 'txt',
+  '.pdf': 'pdf',
 }
 
 type ImportMeta = {
   title: string
   author: string
   chapterCount: number
+  pageCount: number
   cover: { bytes: Uint8Array; extension: string } | null
 }
 
@@ -48,6 +50,7 @@ function readTextMetadata(
     title: parsed.title || fallbackTitle,
     author: parsed.author,
     chapterCount: Math.max(1, parsed.chapters.length),
+    pageCount: 0,
     cover: null,
   }
 }
@@ -73,7 +76,7 @@ export async function importBook(db: Db, sourcePath: string): Promise<ImportResu
 
     const format = detectFormat(sourcePath)
     if (!format) {
-      throw new ImportError('UNSUPPORTED', '只支持 EPUB、Markdown（.md）与 TXT 文件。')
+      throw new ImportError('UNSUPPORTED', '只支持 EPUB、PDF、Markdown（.md）与 TXT 文件。')
     }
 
     const bytes = await readFile(sourcePath)
@@ -85,10 +88,16 @@ export async function importBook(db: Db, sourcePath: string): Promise<ImportResu
     }
 
     const fallbackTitle = basename(sourcePath, extname(sourcePath)).trim() || '未命名'
-    const meta: ImportMeta =
-      format === 'epub'
-        ? await readEpubMetadata(bytes, fallbackTitle)
-        : readTextMetadata(format, bytes, fallbackTitle)
+    let meta: ImportMeta
+    if (format === 'pdf') {
+      // PDF 的标题、作者与页数由 pdf.js 在首次打开时回填；导入阶段只读文件名，
+      // 避免主进程为了元数据再引入一套 PDF 解析器。
+      meta = { title: fallbackTitle, author: '', chapterCount: 0, pageCount: 0, cover: null }
+    } else if (format === 'epub') {
+      meta = { ...(await readEpubMetadata(bytes, fallbackTitle)), pageCount: 0 }
+    } else {
+      meta = readTextMetadata(format, bytes, fallbackTitle)
+    }
 
     const id = randomUUID()
     const extension = extname(sourcePath).toLowerCase()
@@ -113,7 +122,9 @@ export async function importBook(db: Db, sourcePath: string): Promise<ImportResu
       size: info.size,
       coverPath,
       chapterCount: meta.chapterCount,
-      indexedAt: null,
+      pageCount: meta.pageCount,
+      // PDF 不参与全文检索：导入即视为索引完成，避免书架一直显示「未索引」。
+      indexedAt: format === 'pdf' ? Date.now() : null,
       addedAt: Date.now(),
       lastOpenedAt: null,
       deletedAt: null,

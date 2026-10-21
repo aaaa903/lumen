@@ -168,7 +168,7 @@ const homeBody = (() => {
       <div class="hero-copy">
         <p class="eyebrow">Windows 桌面应用 · 完全离线</p>
         <h1>把一本书读完，<br>并把读到的内容留下来。</h1>
-        <p class="lead">Lumen 把阅读、标注与笔记放回同一个窗口。导入 EPUB、Markdown 或 TXT，划线、写批注、跨书搜索，再把整理好的内容导出到自己的笔记系统。</p>
+        <p class="lead">Lumen 把阅读、标注与笔记放回同一个窗口。导入 EPUB、PDF、Markdown 或 TXT，划线、写批注、跨书搜索，再把整理好的内容导出到自己的笔记系统。</p>
         <div class="cta-row">
           <a class="button primary" href="${primaryUrl}">${primaryLabel}<span class="button-meta">v${latest.version} · ${formatSize(primaryAsset?.size)}</span></a>
           <a class="button" href="${relative('home', 'download/')}">其他下载方式</a>
@@ -183,7 +183,7 @@ const homeBody = (() => {
 
     <section class="principles" aria-label="三个原则">
       <div><strong>本地优先</strong><span>书、标注、索引都在本机，断网也能用。</span></div>
-      <div><strong>一套定位</strong><span>标注同时保存 CFI 与原文，换排版也能找回。</span></div>
+      <div><strong>一套定位</strong><span>标注同时保存位置与原文；EPUB 用 CFI，PDF 用页码，换排版也能找回。</span></div>
       <div><strong>随时带走</strong><span>标注导出 Markdown，进 Obsidian、Typora 都行。</span></div>
     </section>
 
@@ -191,31 +191,31 @@ const homeBody = (() => {
       <article class="feature">
         <p class="feature-kicker">读</p>
         <h2>像纸书一样翻页</h2>
-        <p>EPUB 由 epub.js 分页；Markdown 与 TXT 先转成内存 EPUB，走同一条渲染链路。目录、章节切换、进度续读、字号、行距、页边距与四套配色都在阅读器里。</p>
+        <p>EPUB 由 epub.js 分页或滚动；Markdown 与 TXT 先转成内存 EPUB，走同一条渲染链路；PDF 由 pdf.js 按页渲染。目录、章节切换、进度续读、字号、缩放与四套配色都在阅读器里。</p>
         <ul>
           <li>记住每本书读到哪一页，书架显示百分比</li>
-          <li>白纸、米黄、灰绿、夜间四套配色</li>
-          <li>键盘翻页，焦点在正文里也不会失效</li>
+          <li>分页与滚动随时切换，位置不丢</li>
+          <li>PDF 读自带书签大纲，标题作者首次打开自动回填</li>
         </ul>
       </article>
       <article class="feature">
         <p class="feature-kicker">划</p>
         <h2>划线之后还能找到</h2>
-        <p>选中文字就能高亮、写批注或加书签。每条标注同时保存位置与原文片段；文件被重新排版后，按片段重新贴合，失败时标记「位置失效」而不是悄悄丢掉。</p>
+        <p>选中文字就能高亮、写批注或加书签。EPUB 的标注同时保存 CFI 与原文片段，文件被重新排版后按片段重新贴合；PDF 保存页码与原文片段，每次打开时用该页文字核对。失败时标记「位置失效」而不是悄悄丢掉。</p>
         <ul>
           <li>四色高亮，跨段落自动拆分</li>
           <li>批注用 Markdown 写，编辑与预览切换</li>
-          <li>侧栏按章节聚合，点击跳回原文</li>
+          <li>EPUB 与 PDF 共用同一个标注侧栏</li>
         </ul>
       </article>
       <article class="feature">
         <p class="feature-kicker">找</p>
         <h2>把五本书一起搜</h2>
-        <p>正文索引用 SQLite FTS5 的 trigram 分词，两字中文按子串匹配；标注与批注随时可查。标签用来分类，独立笔记不绑定书也能写。</p>
+        <p>正文索引用 SQLite FTS5 的 trigram 分词，两字中文按子串匹配；导入完成后由后台窗口自动建索引，不必先打开一本书。标注与批注随时可查，整理好的内容可以整库导出。</p>
         <ul>
           <li>结果按书与章节分组，命中词高亮</li>
-          <li>搜索范围可切到标注，支持标签过滤</li>
-          <li>选中若干条标注，导出或复制 Markdown</li>
+          <li>导入即索引，阅读不受影响</li>
+          <li>一本书或整个书库都能导出 Markdown</li>
         </ul>
       </article>
     </section>
@@ -400,11 +400,11 @@ const faqItems = [
   ],
   [
     '支持哪些格式',
-    'EPUB、Markdown（.md / .markdown）与 TXT。TXT 支持 UTF-8 与 GBK，按行切分章节；Markdown 的首个一级标题会作为书名。PDF 在下一个版本。',
+    'EPUB、PDF、Markdown（.md / .markdown）与 TXT。TXT 支持 UTF-8 与 GBK，按行切分章节；Markdown 的首个一级标题会作为书名；PDF 保存自带书签作为目录，首次打开自动回填标题、作者与页数。扫描件没有文字层，可以阅读但不能选中标注。',
   ],
   [
     '为什么有的书搜不到',
-    '正文搜索依赖索引：一本书第一次打开后，空闲 2.5 秒会自动建立索引。没打开过的书不会出现在正文搜索结果里；标注与批注不受影响，随时可查。',
+    '正文搜索依赖索引。导入后 Lumen 会在后台窗口排队建索引，不需要先打开；索引完成前书架会显示「未索引」，完成后自动消失。PDF 不参与正文搜索，标注与批注不受影响，随时可查。',
   ],
   [
     '能在多台电脑之间同步吗',
@@ -416,7 +416,7 @@ const faqItems = [
   ],
   [
     '标注会不会因为换排版而错位',
-    '每条标注同时保存 CFI 与原文片段、前后文。CFI 失效时按片段重新查找，相似度低于阈值会标记「位置失效」，保留原文供你手动处理，不会贴到错误段落。',
+    'EPUB 的每条标注同时保存 CFI 与原文片段、前后文。CFI 失效时按片段重新查找，相似度低于阈值会标记「位置失效」，保留原文供你手动处理，不会贴到错误段落。PDF 标注保存页码与原文片段，每次打开用该页文字核对。',
   ],
   [
     '为什么安装包这么大',

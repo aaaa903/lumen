@@ -11,13 +11,15 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 /**
- * electron-builder 的中间产物放在与项目同级的 lumen-desktop-build/：
+ * electron-builder 的中间产物放在与项目同级的 lumen-next-desktop-build/：
+ * 这个名字刻意与项目目录同名。项目是从旧的 lumen 仓库重写的，两个仓库并列存放；
+ * 若共用 lumen-desktop-build/，旧仓库留下的同版本产物会被误收进 desktop-dist。
  * 编辑器会索引工作区里的 .asar，导致下一次构建无法删除旧文件（EPERM/EBUSY）。
  * 这里只把当前版本的分发包复制回项目内的 desktop-dist/，方便查找。
  */
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const SOURCE = path.resolve(ROOT, '..', 'lumen-desktop-build')
+const SOURCE = path.resolve(ROOT, '..', 'lumen-next-desktop-build')
 const TARGET = path.join(ROOT, 'desktop-dist')
 const pkg = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
 const version = pkg.version

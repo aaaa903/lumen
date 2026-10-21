@@ -4,6 +4,7 @@ import { api } from './lib/api'
 import RemoveDialog from './library/RemoveDialog'
 import ShelfView from './library/ShelfView'
 import NotesView from './notes/NotesView'
+import PdfViewer from './reader/PdfViewer'
 import ReaderView from './reader/ReaderView'
 import SearchView from './search/SearchView'
 import SettingsDialog from './settings/SettingsDialog'
@@ -56,6 +57,13 @@ export default function App() {
     return () => {
       disposed = true
     }
+  }, [refresh])
+
+  // 后台索引完成时刷新书架，去掉「未索引」标记，搜索也能立刻命中。
+  useEffect(() => {
+    return api.onIndexed(() => {
+      void refresh()
+    })
   }, [refresh])
 
   const handleImport = useCallback(
@@ -200,13 +208,10 @@ export default function App() {
   const activeBook = activeId ? books.find((book) => book.id === activeId) ?? null : null
 
   if (activeBook) {
-    return (
-      <ReaderView
-        book={activeBook}
-        target={openTarget}
-        onIndexed={() => void refresh()}
-        onExit={exitReader}
-      />
+    return activeBook.format === 'pdf' ? (
+      <PdfViewer book={activeBook} target={openTarget} onExit={exitReader} />
+    ) : (
+      <ReaderView book={activeBook} target={openTarget} onExit={exitReader} />
     )
   }
 

@@ -10,6 +10,8 @@ import type {
   ExportRequest,
   ImportResult,
   IndexChunk,
+  IndexerJob,
+  LibraryExportResult,
   LumenApi,
   Note,
   OpenTarget,
@@ -21,6 +23,7 @@ import type {
   ShelfBook,
   Tag,
   UpdateAnnotationInput,
+  UpdateBookMetaInput,
 } from '../../shared/types'
 
 const bridge = (): LumenApi => {
@@ -47,6 +50,7 @@ export const api: LumenApi = {
   getBook: (id) => bridge().getBook(id),
   readBookFile: (id) => bridge().readBookFile(id),
   readCover: (id) => bridge().readCover(id),
+  updateBookMeta: (input) => bridge().updateBookMeta(input),
   removeBook: (id, purge) => bridge().removeBook(id, purge),
   touchBook: (id) => bridge().touchBook(id),
   getProgress: (bookId) => bridge().getProgress(bookId),
@@ -60,6 +64,11 @@ export const api: LumenApi = {
   indexBegin: (bookId) => bridge().indexBegin(bookId),
   indexChunks: (bookId, chunks) => bridge().indexChunks(bookId, chunks),
   indexFinish: (bookId) => bridge().indexFinish(bookId),
+  requestIndex: (bookId) => bridge().requestIndex(bookId),
+  indexerNext: () => bridge().indexerNext(),
+  indexerRelease: (bookId) => bridge().indexerRelease(bookId),
+  indexerComplete: (bookId, ok) => bridge().indexerComplete(bookId, ok),
+  onIndexed: (callback) => bridge().onIndexed(callback),
   search: (input) => bridge().search(input),
   listTags: () => bridge().listTags(),
   createTag: (name) => bridge().createTag(name),
@@ -72,6 +81,7 @@ export const api: LumenApi = {
   saveNote: (input) => bridge().saveNote(input),
   deleteNote: (id) => bridge().deleteNote(id),
   exportAnnotations: (input) => bridge().exportAnnotations(input),
+  exportLibrary: () => bridge().exportLibrary(),
   saveText: (input) => bridge().saveText(input),
 }
 
@@ -87,6 +97,8 @@ export type {
   ExportRequest,
   ImportResult,
   IndexChunk,
+  IndexerJob,
+  LibraryExportResult,
   Note,
   OpenTarget,
   Progress,
@@ -97,4 +109,5 @@ export type {
   ShelfBook,
   Tag,
   UpdateAnnotationInput,
+  UpdateBookMetaInput,
 }

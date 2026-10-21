@@ -10,7 +10,7 @@
 
 ## 项目
 
-Lumen 是一个 Windows 桌面应用：本地优先的阅读、标注与知识库。导入 EPUB / Markdown / TXT，阅读、高亮、批注、书签，跨书全文搜索，导出 Markdown。完全离线，无账号，无遥测，零外部网络请求。
+Lumen 是一个 Windows 桌面应用：本地优先的阅读、标注与知识库。导入 EPUB / PDF / Markdown / TXT，阅读、高亮、批注、书签，跨书全文搜索，导出 Markdown。完全离线，无账号，无遥测，零外部网络请求。
 
 已确定的决策，不要重新讨论：
 
@@ -38,7 +38,7 @@ Lumen 是一个 Windows 桌面应用：本地优先的阅读、标注与知识�
 4. 渲染层代码里不得出现 `require`、`fs`、`node:sqlite`、`process`。
 5. 不发起任何外部网络请求；主进程的请求拦截器必须在 M0 就位。
 6. 每完成一个里程碑，同步更新 `PRD.md` / `TECH_DESIGN.md` / `AGENTS.md` 中受影响的内容，并在回复里列出改了哪些文档。
-7. 不要为了「以后可能用到」提前抽象。PDF、双向链接、批量索引都不在 MVP。
+7. 不要为了「以后可能用到」提前抽象。PDF、双向链接、批量索引都不在 MVP（PDF 与批量索引进 V1）。
 
 ## 里程碑
 
@@ -103,6 +103,18 @@ Lumen 是一个 Windows 桌面应用：本地优先的阅读、标注与知识�
 - README 补齐安装、数据位置、Smart App Control 与官网部署说明
 
 验收：PRD §8 场景 9 通过；`npm run pack` 在干净机器上能装、能卸、卸载保留数据。
+
+### V1 增强（`0.2.0`）
+
+交付：
+
+- PDF：`pdfjs-dist` 渲染、页码进度、书签大纲目录、标题作者页数回填；标注用「页码 + 原文片段」，只支持同页选择
+- 滚动模式：`rendition.flow('scrolled-doc')`，分页 / 滚动共用同一套目录、CFI、标注与进度
+- 导入即索引：`electron/indexer.ts` 排队，隐藏窗口（`?worker=index`）执行 `IndexWorker`，带租约与重试
+- 库导出：`export:library` 一次导出整个书库的标注，一本书一个 Markdown
+- 迁移 `002_pdf.sql`：重建 `books` 支持 `pdf` 与 `page_count`，迁移期间临时关闭外键
+
+验收：PRD §8 场景 10–13 通过。
 
 ## 交付方式
 

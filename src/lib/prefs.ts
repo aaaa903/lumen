@@ -3,8 +3,10 @@
 export type ReaderTheme = 'paper' | 'sepia' | 'sage' | 'night'
 export type LineHeightKey = 'tight' | 'normal' | 'loose'
 export type MarginKey = 'narrow' | 'normal' | 'wide'
+export type ReaderFlow = 'paginated' | 'scrolled'
 
 export const THEME_ORDER: ReaderTheme[] = ['paper', 'sepia', 'sage', 'night']
+export const FLOW_ORDER: ReaderFlow[] = ['paginated', 'scrolled']
 export const FONT_MIN = 80
 export const FONT_MAX = 170
 export const FONT_STEP = 10
@@ -33,11 +35,17 @@ export const MARGIN_LABEL: Record<MarginKey, string> = {
   wide: '宽',
 }
 
+export const FLOW_LABEL: Record<ReaderFlow, string> = {
+  paginated: '分页',
+  scrolled: '滚动',
+}
+
 const KEYS = {
   theme: 'lumen:theme',
   fontSize: 'lumen:font-size',
   lineHeight: 'lumen:line-height',
   margin: 'lumen:margin',
+  flow: 'lumen:reader-flow',
   lastBook: 'lumen:last-book',
   shelfFilter: 'lumen:shelf-filter',
 } as const
@@ -47,6 +55,8 @@ export type ReaderPrefs = {
   fontSize: number
   lineHeight: LineHeightKey
   margin: MarginKey
+  /** 滚动模式是 V1 增加的；老用户的 localStorage 没有这个键，默认分页。 */
+  flow: ReaderFlow
 }
 
 function readStored(key: string): string | null {
@@ -70,6 +80,7 @@ export function readReaderPrefs(): ReaderPrefs {
   const fontSize = Number(readStored(KEYS.fontSize))
   const lineHeight = readStored(KEYS.lineHeight) as LineHeightKey | null
   const margin = readStored(KEYS.margin) as MarginKey | null
+  const flow = readStored(KEYS.flow) as ReaderFlow | null
 
   return {
     theme: theme && THEME_ORDER.includes(theme) ? theme : 'paper',
@@ -77,6 +88,7 @@ export function readReaderPrefs(): ReaderPrefs {
       Number.isFinite(fontSize) && fontSize >= FONT_MIN && fontSize <= FONT_MAX ? fontSize : 100,
     lineHeight: lineHeight && lineHeight in LINE_HEIGHTS ? lineHeight : 'normal',
     margin: margin && margin in MARGINS ? margin : 'normal',
+    flow: flow && FLOW_ORDER.includes(flow) ? flow : 'paginated',
   }
 }
 
@@ -85,6 +97,7 @@ export function saveReaderPrefs(prefs: ReaderPrefs): void {
   writeStored(KEYS.fontSize, String(prefs.fontSize))
   writeStored(KEYS.lineHeight, prefs.lineHeight)
   writeStored(KEYS.margin, prefs.margin)
+  writeStored(KEYS.flow, prefs.flow)
 }
 
 export function readLastBook(): string | null {

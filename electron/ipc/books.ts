@@ -3,7 +3,8 @@ import { extname } from 'node:path'
 import { dialog } from 'electron'
 import type { ImportResult, ShelfBook } from '../../shared/types'
 import type { Db } from '../db/open'
-import { getShelfBook, listShelf, removeBook, touchBook } from '../db/repositories/books'
+import { getShelfBook, listShelf, removeBook, touchBook, updatePdfMeta } from '../db/repositories/books'
+import type { Indexer } from '../indexer'
 import { importBook } from '../library/import'
 import { resolveUserDataPath } from '../library/paths'
 import { fail, handle, IpcError, ok, readBoolean, readObject, readString, readStringArray } from './handle'
@@ -32,13 +33,18 @@ async function readFileBuffer(absolutePath: string): Promise<ArrayBuffer> {
   ) as ArrayBuffer
 }
 
-export function registerBookIpc(db: Db): void {
+export function registerBookIpc(db: Db, indexer: Indexer): void {
   handle<ImportResult[]>('books:import', async (payload) => {
     const paths = readStringArray(readObject(payload)['paths'], 'paths')
     const results: ImportResult[] = []
     // 逐本处理：一本坏书不能拖垮整批导入。
     for (const path of paths) {
-      results.push(await importBook(db, path))
+      const result = await importBook(db, path)
+      results.push(result)
+      // 导入完就排队建索引，用户不必先打开一次才能搜到。
+      if (result.status === 'ok' && result.book.format !== 'pdf') {
+        indexer.enqueue(result.book.id)
+      }
     }
     return ok(results)
   })
@@ -77,6 +83,24 @@ export function registerBookIpc(db: Db): void {
     }
   })
 
+  handle<ShelfBook>('books:updateMeta', (payload) => {
+    const raw = readObject(payload)
+    const id = readString(raw['id'], 'id')
+    const book = requireBook(db, id)
+    if (book.format !== 'pdf') {
+      throw new IpcError('UNSUPPORTED', '只有 PDF 会在打开时回填元数据。')
+    }
+
+    const title = typeof raw['title'] === 'string' ? raw['title'].slice(0, 300) : undefined
+    const author = typeof raw['author'] === 'string' ? raw['author'].slice(0, 200) : undefined
+    const pageCount =
+      typeof raw['pageCount'] === 'number' && Number.isFinite(raw['pageCount'])
+        ? Math.max(0, Math.trunc(raw['pageCount']))
+        : undefined
+    updatePdfMeta(db, id, { title, author, pageCount })
+    return ok(requireBook(db, id))
+  })
+
   handle<null>('books:remove', async (payload) => {
     const raw = readObject(payload)
     const id = readString(raw['id'], 'id')
@@ -105,7 +129,7 @@ export function registerBookIpc(db: Db): void {
       title: '导入书籍',
       buttonLabel: '导入',
       properties: ['openFile', 'multiSelections'],
-      filters: [{ name: '书籍文件', extensions: ['epub', 'md', 'markdown', 'txt'] }],
+      filters: [{ name: '书籍文件', extensions: ['epub', 'pdf', 'md', 'markdown', 'txt'] }],
     })
     return ok(result.canceled ? [] : result.filePaths)
   })

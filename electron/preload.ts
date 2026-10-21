@@ -21,6 +21,7 @@ const api: LumenApi = {
   getBook: (id) => ipcRenderer.invoke('books:get', { id }),
   readBookFile: (id) => ipcRenderer.invoke('books:readFile', { id }),
   readCover: (id) => ipcRenderer.invoke('books:readCover', { id }),
+  updateBookMeta: (input) => ipcRenderer.invoke('books:updateMeta', input),
   removeBook: (id, purge) =>
     ipcRenderer.invoke('books:remove', { id, purge: purge === true }),
   touchBook: (id) => ipcRenderer.invoke('books:touch', { id }),
@@ -34,6 +35,17 @@ const api: LumenApi = {
   indexBegin: (bookId) => ipcRenderer.invoke('search:indexBegin', { bookId }),
   indexChunks: (bookId, chunks) => ipcRenderer.invoke('search:indexChunks', { bookId, chunks }),
   indexFinish: (bookId) => ipcRenderer.invoke('search:indexFinish', { bookId }),
+  requestIndex: (bookId) => ipcRenderer.invoke('indexer:request', { bookId }),
+  indexerNext: () => ipcRenderer.invoke('indexer:next'),
+  indexerRelease: (bookId) => ipcRenderer.invoke('indexer:release', { bookId }),
+  indexerComplete: (bookId, ok) => ipcRenderer.invoke('indexer:complete', { bookId, ok }),
+  onIndexed: (callback) => {
+    const listener = (_event: unknown, bookId: string): void => callback(bookId)
+    ipcRenderer.on('indexer:indexed', listener)
+    return () => {
+      ipcRenderer.removeListener('indexer:indexed', listener)
+    }
+  },
   search: (input) => ipcRenderer.invoke('search:query', input),
   listTags: () => ipcRenderer.invoke('tags:list'),
   createTag: (name) => ipcRenderer.invoke('tags:create', { name }),
@@ -47,6 +59,7 @@ const api: LumenApi = {
   saveNote: (input) => ipcRenderer.invoke('notes:save', input),
   deleteNote: (id) => ipcRenderer.invoke('notes:delete', { id }),
   exportAnnotations: (input) => ipcRenderer.invoke('export:bookAnnotations', input),
+  exportLibrary: () => ipcRenderer.invoke('export:library'),
   saveText: (input) => ipcRenderer.invoke('app:saveText', input),
   // 拖放进来的 File 不在渲染层持有真实路径，必须由 preload 的 webUtils 取。
   pathForFile: (file) => {

@@ -2379,3 +2379,129 @@ code {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+/* PDF 阅读器：连续滚动，页内文字层负责选区与高亮 */
+.pdf-scroll {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+}
+
+.pdf-pages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  min-height: 100%;
+  padding: 18px 0 48px;
+}
+
+.pdf-page {
+  position: relative;
+  flex: 0 0 auto;
+  background: #ffffff;
+  box-shadow: 0 12px 34px -20px rgba(34, 31, 27, 0.5);
+}
+
+.pdf-page canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.pdf-reader.is-night .pdf-page {
+  background: #171614;
+}
+
+.pdf-reader.is-night .pdf-page canvas {
+  filter: invert(0.92) hue-rotate(180deg);
+}
+
+.pdf-highlights {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.pdf-mark {
+  position: absolute;
+  border-radius: 2px;
+  mix-blend-mode: multiply;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.pdf-reader.is-night .pdf-mark {
+  mix-blend-mode: screen;
+}
+
+/* pdf.js 文字层：文字透明、位置由 pdf.js 计算，用来承接选区 */
+.pdf-text-layer {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  text-align: initial;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  caret-color: CanvasText;
+  z-index: 1;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+
+.pdf-text-layer span,
+.pdf-text-layer br {
+  position: absolute;
+  color: transparent;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+
+.pdf-text-layer > :not(.markedContent),
+.pdf-text-layer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+
+.pdf-text-layer .markedContent {
+  display: contents;
+}
+
+.pdf-text-layer ::selection {
+  background: rgba(74, 111, 165, 0.3);
+}
+
+.pdf-text-layer .endOfContent {
+  display: block;
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: -1;
+  cursor: default;
+  user-select: none;
+}
+
+.pdf-reader .setting-hint {
+  margin: 0;
+  padding: 0 18px 14px;
+  color: var(--ink-faint);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.pdf-reader.is-night .setting-hint {
+  color: #8f887c;
+}
+
+/* 隐藏的索引窗口：只跑任务，不显示任何内容 */
+.index-worker {
+  display: none;
+}

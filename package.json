@@ -1,6 +1,6 @@
 {
   "name": "lumen",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "本地优先的阅读、标注与知识库桌面应用",
   "author": "TXY",
@@ -8,7 +8,9 @@
   "main": "dist/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
+    "predev": "node scripts/copy-pdfjs-assets.mjs",
     "build": "electron-vite build",
+    "prebuild": "node scripts/copy-pdfjs-assets.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "samples": "node scripts/make-sample-library.mjs",
@@ -41,6 +43,7 @@
     "electron-builder": "^26.15.3",
     "electron-vite": "^6.0.0",
     "iconv-lite": "^0.6.3",
+    "pdfjs-dist": "^5.7.284",
     "typescript": "^7.0.2",
     "vite": "^8.3.4",
     "vitest": "^3.2.4"
@@ -49,7 +52,7 @@
     "appId": "app.lumen.reader",
     "productName": "Lumen",
     "directories": {
-      "output": "../lumen-desktop-build",
+      "output": "../lumen-next-desktop-build",
       "buildResources": "build"
     },
     "files": [

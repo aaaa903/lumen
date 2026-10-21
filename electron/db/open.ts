@@ -71,11 +71,23 @@ function migrate(db: Db, dbPath: string): void {
   if (current > 0 && existsSync(dbPath)) backup(db, dbPath, current)
 
   for (const migration of pending) {
-    withTransaction(db, () => {
-      db.exec(migration.sql)
-      // 版本号与结构改动在同一事务里前进，失败时不会留下「结构变了但版本没动」的库。
-      db.exec(`PRAGMA user_version = ${migration.version}`)
-    })
+    // 表重建迁移（例如给 books.format 增加枚举值）需要先删旧表再改名。
+    // 外键必须在事务外关闭，否则 DROP TABLE 会级联清空子表；迁移结束立即恢复并校验。
+    db.exec('PRAGMA foreign_keys = OFF')
+    try {
+      withTransaction(db, () => {
+        db.exec(migration.sql)
+        // 版本号与结构改动在同一事务里前进，失败时不会留下「结构变了但版本没动」的库。
+        db.exec(`PRAGMA user_version = ${migration.version}`)
+      })
+    } finally {
+      db.exec('PRAGMA foreign_keys = ON')
+    }
+  }
+
+  const violations = db.prepare('PRAGMA foreign_key_check').all()
+  if (violations.length > 0) {
+    throw new Error(`迁移后外键校验失败（${violations.length} 处），已停止启动以免继续写坏数据。`)
   }
 }
 

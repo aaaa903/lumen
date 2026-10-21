@@ -164,6 +164,8 @@ export async function loadBookAsEpub(book: ShelfBook): Promise<ArrayBuffer> {
   if (!result.ok) throw new Error(result.message)
 
   if (book.format === 'epub') return result.data
+  // PDF 由 PdfViewer 用 pdf.js 渲染，不能走 epub.js 链路。
+  if (book.format === 'pdf') throw new Error('这本书是 PDF，请用 PDF 阅读器打开。')
 
   const cached = cache.get(book.id)
   if (cached) return cached

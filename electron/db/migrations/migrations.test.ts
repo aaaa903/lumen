@@ -11,8 +11,19 @@ describe('迁移清单', () => {
     for (const migration of migrations) {
       expect(migration.name).toMatch(/^\d{3}_[a-z0-9_]+$/)
       expect(migration.sql.trim().length).toBeGreaterThan(100)
-      expect(migration.sql).not.toMatch(/DROP\s+TABLE/i)
     }
+    // 首版建表脚本不允许删表；后续版本只允许为了重建 books 而删它。
+    expect(migrations[0].sql).not.toMatch(/DROP\s+TABLE/i)
+    for (const migration of migrations.slice(1)) {
+      expect(migration.sql).not.toMatch(/DROP\s+TABLE\s+(?!books\b)/i)
+    }
+  })
+
+  it('2 号迁移把 pdf 加进格式枚举', () => {
+    const second = migrations[1]
+    expect(second.version).toBe(2)
+    expect(second.sql).toContain("'pdf'")
+    expect(second.sql).toContain('ALTER TABLE books_new RENAME TO books')
   })
 
   it('首版脚本包含全部核心表', () => {

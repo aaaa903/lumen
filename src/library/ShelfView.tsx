@@ -9,6 +9,7 @@ const FORMAT_LABEL: Record<ShelfBook['format'], string> = {
   epub: 'EPUB',
   markdown: 'MD',
   txt: 'TXT',
+  pdf: 'PDF',
 }
 
 type ShelfViewProps = {

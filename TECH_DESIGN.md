@@ -1,8 +1,8 @@
 # Lumen 技术设计
 
-版本：0.7（M4 已发布：v0.1.0 Release 与官网均上线）
-对应 PRD：0.7
-最后更新：2026-10-21
+版本：0.8（V1 已发布：v0.2.0 增加 PDF、导入即索引、滚动模式与库导出）
+对应 PRD：0.8
+最后更新：2026-10-22
 
 本文描述**现状与下一步**。代码与本文冲突时，以代码为准并立即修正本文，不留「待更新」。
 
@@ -28,6 +28,7 @@
 | 构建 | `electron-vite` + Vite | 主进程、预加载、渲染层三份产物 |
 | 界面 | React 19 | 函数组件 + hooks |
 | EPUB | `epub.js` | 0.3.x |
+| PDF | `pdfjs-dist` | 5.7.x，worker 与 cMap 随应用分发，不联网 |
 | 打包 | `electron-builder` | NSIS + portable |
 | Markdown | `markdown-it` | 只做渲染，不做编辑；TXT / Markdown 转换也用它 |
 | 批注编辑 | Markdown 文本域 + 编辑／预览切换 | M2 未引入 CodeMirror，保持零额外依赖；需要语法高亮时再评估 |
@@ -40,6 +41,7 @@
 | `electron-vite` | 主进程写 TS 需要一个打包步骤；比自建 `tsup + 重启脚本` 更少出错 | devDependency |
 | `markdown-it` | 渲染批注与笔记，`epub.js` 自带的 XHTML 处理不适用；TXT / Markdown 转 EPUB 也复用 | ~30 KB |
 | `dompurify` | Markdown 渲染结果必须消毒，避免书内 HTML 注入界面（M2 引入） | ~20 KB |
+| `pdfjs-dist` | PDF 版式固定，epub.js 无法渲染；pdf.js 是唯一维护活跃、含文字层与书签大纲的纯 JS 实现（V1 引入） | 渲染包 ~300 KB gzip，worker 与 cMap 另行分发 |
 | `vitest` | 重锚与搜索语句构造必须有单测 | devDependency |
 
 **不引入 `better-sqlite3`。** 它在 Windows 上需要 Visual Studio Build Tools 编译，本机与 CI 都没有；而 Electron 44 自带的 `node:sqlite` 是同一个 SQLite（3.53.4），已编入 FTS5 与 `trigram`，且不需要 ABI 重建。代价是 API 仍标记为实验阶段，因此全部数据库调用收在 `electron/db/open.ts` 与 `electron/db/repositories/` 内，将来换驱动只动这一层。
@@ -67,9 +69,11 @@
 硬边界：
 
 - `node:sqlite` 只在 `electron/db/` 下出现；渲染层引用该模块会构建失败（CI 检查 `src/` 中不出现）。
-- `epub.js` 只在 `src/reader/` 下出现。
+- `epub.js` 只在 `src/reader/` 下出现；`pdfjs-dist` 只在 `src/reader/PdfViewer.tsx` 里出现。
 - 渲染层通过 `lib/api.ts` 调用 `window.lumen`，组件不直接写 `window.lumen`。
 - 网络拦截在 `session.defaultSession.webRequest`，白名单见 §12。
+- 索引不占前台：`electron/indexer.ts` 排队，隐藏窗口加载同一份渲染产物（`?worker=index`）执行 `src/reader/IndexWorker.tsx`，主进程只存队列状态、租约与重试次数。
+- PDF 的元数据（标题、作者、页数）由渲染层用 pdf.js 读出后经 `books:updateMeta` 回填；主进程不引入第二套 PDF 解析器。
 
 ## 4. 目录结构（规划）
 
@@ -81,17 +85,20 @@ electron/
   ipc/
     register.ts            统一注册，错误统一包装
     handle.ts              入参校验与 Result 包装
-    books.ts               导入、列表、读取、移除
+    books.ts               导入、列表、读取、移除、PDF 元数据回填
     open-files.ts          「用 Lumen 打开」与第二实例的文件转交
     progress.ts            进度读写
     annotations.ts         标注增删改查
     notes.ts               独立笔记
     search.ts              索引写入、正文与标注检索
+    indexer.ts             后台索引任务通道（领取 / 归还 / 完成）
     tags.ts                标签管理与关联
-    export.ts              标注导出、保存 Markdown
+    export.ts              标注导出、库导出、保存 Markdown
+  indexer.ts               索引队列、隐藏窗口生命周期、租约与重试
   db/
-    open.ts                打开数据库、PRAGMA、迁移
+    open.ts                打开数据库、PRAGMA、迁移、外键校验
     migrations/001_init.sql
+    migrations/002_pdf.sql books.format 增加 pdf、books.page_count
     repositories/          books / progress / annotations / search / tags / notes / settings
   library/
     import.ts              读取文件、算 hash、解析元数据、落盘
@@ -107,24 +114,29 @@ shared/
   search-query.ts          检索语句构造、片段截取
   export.ts                标注 → Markdown（纯函数）
 src/
-  main.tsx                 React 挂载
+  main.tsx                 React 挂载；`?worker=index` 时挂载索引窗口
   App.tsx                  路由：书架 / 阅读器 / 搜索 / 笔记
   library/                 书架、封面占位、导入入口、移除确认
-  settings/                设置对话框（数据目录、版本、清空数据）
-  reader/                  epub.js 生命周期、分页、目录、主题、索引器
+  settings/                设置对话框（数据目录、版本、清空数据、库导出）
+  reader/                  epub.js 生命周期、分页/滚动、目录、主题、索引器
+    PdfViewer.tsx          pdf.js 渲染、页码进度、PDF 标注与目录
+    IndexWorker.tsx        隐藏窗口里的索引循环
+    indexer.ts             逐章取正文、分批提交
+    toc.ts                 目录归一化与 spine 兜底
   annotations/             选中工具条、高亮渲染、侧栏、批注编辑器、导出预览
   search/                  跨书搜索视图
   notes/                   独立笔记与标签管理
   lib/
     api.ts                 类型化 IPC 客户端
     format.ts              体积、百分比、相对时间
-    prefs.ts               localStorage 偏好
+    prefs.ts               localStorage 偏好（含 `lumen:reader-flow`）
     convert/               Markdown / TXT → 内存 EPUB
   global.d.ts              window.lumen 类型声明
   styles.css
 docs/                      实施与官网提示词、FTS 实测结论
 scripts/
-  make-sample-library.mjs  生成 5 本书用于搜索与性能验证
+  make-sample-library.mjs  生成 6 本测试书（含 PDF）用于搜索与性能验证
+  copy-pdfjs-assets.mjs    把 pdf.js 的 cMap 与标准字体复制到 public/pdfjs/
   probe-fts.cjs            FTS5 trigram 实测（npm run probe:fts）
   db-inspect.cjs           只读查看当前数据库（npm run db:inspect）
   cdp-eval.mjs             在渲染层执行表达式（调试用，不提交临时脚本）
@@ -134,6 +146,7 @@ scripts/
   collect-desktop.mjs      把当前版本产物复制到 desktop-dist/
   release-assets.mjs       计算 SHA-256、写 SHA256SUMS.txt、回填 releases.json
   release-notes.mjs        由 releases.json 生成 Release 说明
+public/pdfjs/              pdf.js 的 cmaps 与 standard_fonts（不进版本库，predev / prebuild 生成）
 build/                     打包图标（不进版本库）
 site/
   build.mjs                零依赖静态站生成器（读配置与 releases.json）
@@ -155,19 +168,22 @@ site/
 - 打开时设置：`journal_mode = WAL`、`synchronous = NORMAL`、`foreign_keys = ON`、`busy_timeout = 5000`、`temp_store = MEMORY`
 - 版本号放在 `PRAGMA user_version`，与 `migrations/` 下的序号一致。
 
-### 5.2 Schema（`001_init.sql`）
+### 5.2 Schema（`001_init.sql` + `002_pdf.sql`）
+
+`001_init.sql` 建全部核心表；`002_pdf.sql` 重建 `books`，把 `format` 的枚举扩到 `pdf` 并加 `page_count`。下面是迁移后的现状：
 
 ```sql
 CREATE TABLE books (
   id            TEXT PRIMARY KEY,              -- 随机 id，不用自增，便于跨设备迁移
   title         TEXT NOT NULL,
   author        TEXT NOT NULL DEFAULT '',
-  format        TEXT NOT NULL CHECK (format IN ('epub', 'markdown', 'txt')),
+  format        TEXT NOT NULL CHECK (format IN ('epub', 'markdown', 'txt', 'pdf')),
   file_path     TEXT NOT NULL,                 -- 相对 userData，换机后可重定位
   sha256        TEXT NOT NULL UNIQUE,
   size          INTEGER NOT NULL,
   cover_path    TEXT,
   chapter_count INTEGER NOT NULL DEFAULT 0,
+  page_count    INTEGER NOT NULL DEFAULT 0,    -- 仅 PDF 使用，首次打开回填
   indexed_at    INTEGER,                       -- 空表示尚未建搜索索引
   added_at      INTEGER NOT NULL,
   last_opened_at INTEGER,
@@ -273,6 +289,8 @@ CREATE TABLE settings (
 - 迁移只增不改：加列、加表、加索引；删列需要重建表并显式写数据搬迁。
 - 执行前把数据库文件复制到 `userData/backups/lumen-v<old>-<timestamp>.db`，保留最近 3 份。
 - `PRAGMA user_version` 从 1 起；数据库里 `user_version = 0` 视为新库。
+- 需要重建表的迁移（当前只有 `002_pdf`）在事务外临时 `PRAGMA foreign_keys = OFF`，否则 `DROP TABLE books` 会按 `ON DELETE CASCADE` 清空 `progress`、`annotations`、`search_chunks`。迁移结束立即恢复外键，并跑 `PRAGMA foreign_key_check`；有违例就抛错停止启动，不带病写数据。
+- `002_pdf` 先把旧表数据复制到 `books_new`（`page_count` 填 0），再删旧表、改名。子表的外键仍指向表名 `books`，重建后无需改动。
 
 ### 5.4 文件存储
 
@@ -292,6 +310,7 @@ CREATE TABLE settings (
   ├─ 查 books.sha256；命中则返回 { status: 'duplicate', bookId }
   ├─ 按扩展名解析元数据
   │    ├─ epub：读 META-INF/container.xml → OPF → title/creator/cover
+  │    ├─ pdf：先用文件名；标题、作者、页数等首次打开后由 pdf.js 回填
   │    ├─ md：front matter 的 title/author，否则第一个 `# 标题`，否则文件名
   │    └─ txt：文件名；编码按 UTF-8 → GBK 顺序探测
   ├─ 写入 books/<id>.<ext>，有封面则写 covers/<id>.<ext>
@@ -301,7 +320,9 @@ CREATE TABLE settings (
 
 整批导入逐个返回，渲染层汇总「导入 N 本 / M 本已在书库 / K 本失败」。一本坏书不影响其他本。
 
-限制：单文件 ≤ 200 MB，超过直接拒绝并说明；EPUB 必须含 `META-INF/container.xml` 与可解析 OPF，加密 EPUB 返回 `ENCRYPTED`。
+限制：单文件 ≤ 200 MB，超过直接拒绝并说明；EPUB 必须含 `META-INF/container.xml` 与可解析 OPF，加密 EPUB 返回 `ENCRYPTED`。PDF 只在导入时按扩展名识别，真正能否打开由首次阅读时的 pdf.js 判断并给出错误；加密 PDF 提示「有密码，暂不支持打开」。
+
+导入成功后：EPUB / Markdown / TXT 立即 `indexer.enqueue(bookId)`；PDF 不参与全文检索，直接写 `indexed_at`，避免书架一直显示「未索引」。
 
 ### 6.2 打开一本书
 
@@ -311,11 +332,15 @@ books:list / books:get(bookId)
   ├─ books:readFile(bookId) → ArrayBuffer
   ├─ EPUB：ArrayBuffer → Blob → new ePub(blob)
   ├─ markdown/txt：解码 → 章节切分 → 内存 EPUB Blob → new ePub(blob)
-  ├─ rendition.display(progress.locator?.cfi)（CFI 失效则退回首页）
-  └─ 首屏稳定 1.2 秒后生成 locations，校准百分比（索引进 M3）
+  ├─ pdf：ArrayBuffer → pdf.js getDocument → 逐页 canvas + 文字层
+  ├─ EPUB：rendition.display(progress.locator?.cfi)（CFI 失效则退回首页）
+  ├─ PDF：滚到 progress.locator.page（页码越界则回第一页）
+  └─ 首屏稳定 1.2 秒后生成 locations，校准百分比（索引由后台窗口负责）
 ```
 
 Markdown / TXT 的转换结果按 `bookId` 缓存在内存，最多 3 本（`src/lib/convert/text-epub.ts`）。书内容不可变（每次导入都是新 id），因此不需要失效逻辑。
+
+滚动模式不换渲染链路：仍在 `epub.js` 里，把 `renderTo` 的 `flow` 设为 `scrolled-doc`；切换时调用 `rendition.flow()` 重排，进度、目录、CFI 与标注全部继续有效。翻页键在滚动模式下改为对 epub.js 内部容器 `scrollBy` 一屏，到章底再 `next()`。
 
 ### 6.3 阅读进度
 
@@ -328,20 +353,22 @@ Markdown / TXT 的转换结果按 `bookId` 缓存在内存，最多 3 本（`src
 
 ```ts
 type Locator = {
-  format: 'epub' | 'markdown' | 'txt'
-  cfi: string | null          // epub.js 生成，可能为 null（书签以外的情况不写 null）
-  href: string                // 章节相对路径，已归一化
+  format: 'epub' | 'markdown' | 'txt' | 'pdf'
+  cfi: string | null          // epub.js 生成；PDF 与书签为 null
+  href: string                // 章节相对路径；PDF 为 page-<n>
   chapterIndex: number
   chapterTitle: string
   quote: string               // 选中原文，最长 500 字；书签为空串
   prefix: string              // 原文前 32 字，用于消歧
   suffix: string              // 原文后 32 字
-  page: number                // 该章内页码，仅用于展示
+  page: number                // EPUB 为章内页码；PDF 为绝对页码
   percent: number             // 全书百分比，0–1
 }
 ```
 
 `locator` 以 JSON 文本存库，读取时经 `shared/locator.ts` 的 `parseLocator` 校验（不引入 zod，手写校验只覆盖固定字段）；校验失败视为 `orphaned`，不抛错阻断整页渲染。标注的 `quote` 必填，书签写空串。
+
+PDF 不存矩形坐标：坐标随缩放与窗口宽度变化，存下来也会失效。高亮每次渲染页面时，用 `quote` 在该页文字层里重新查找区间并画上方块。
 
 ### 6.5 标注创建
 
@@ -384,14 +411,42 @@ for each annotation:
 - 重锚只写回成功的结果，不写回失败，避免把可能正确的旧 CFI 冲掉。
 - 重锚在渲染完成后异步执行，不阻塞首屏；结果通过事件让侧栏刷新「位置失效」标记。
 
+PDF 的校验换一种方式（没有 CFI 可用）：
+
+```
+for each annotation (最多前 200 条):
+  page = annotation.locator.page
+  if page 超出总页数: 标记 orphaned
+  text = 该页文字层的纯文本
+  if normalize(text).includes(normalize(quote)): 保留
+  else: 标记 orphaned
+```
+
+只读前 200 条是为了打开上千条标注的书时不卡住；超出的条目不校验，保持原状。扫描件没有文字层，`quote` 必然对不上，会标记失效——这是已知限制，不做 OCR。
+
 ### 6.7 搜索索引
 
-- 触发：打开一本书并完成首屏渲染后，空闲 2.5 秒自动开始；`indexedAt` 非空则跳过。没有手动「建立索引」按钮。
-- 执行位置：渲染层（能拿到 epub.js 解析后的 DOM），逐章 `spine.get(i).load()` → `document.body.textContent`。
+索引不再由阅读器顺带完成，而是导入即排队、由隐藏窗口执行：
+
+```
+导入成功 / 打开未索引的书 / 启动时扫描
+  └─ indexer.enqueue(bookId)（主进程去重，PDF 忽略）
+       └─ 需要时创建隐藏窗口 lumen://app/index.html?worker=index
+            └─ IndexWorker 循环 indexer:next → 领任务（带 180 s 租约）
+                 ├─ books:get → 非 PDF → loadBookAsEpub → new ePub
+                 ├─ 逐章 spine.get(i).load() → body.textContent
+                 └─ search:indexBegin → 分批 search:indexChunks → search:indexFinish
+            └─ indexer:complete(bookId, ok) → 主进程通知所有界面窗口刷新书架
+```
+
+- 队列：主进程内存 `Set` 去重，`MAX_ATTEMPTS = 2`；失败后 4 s 重试一次，仍失败就等下次启动。
+- 租约：领到任务 180 s 内没有完成报告（窗口崩溃、页面冻结、热更新丢回调）就收回重排，避免书架永远「未索引」。
+- 归还：索引窗口卸载（React StrictMode 双跑、HMR）前调用 `indexer:release`，任务原样回队且不计重试次数。
+- 空闲：队列为空 20 s 后关闭隐藏窗口；主窗口关闭时立即销毁，避免进程多留。
 - 批量：累计 30 万字符提交一次；单章超过 50 万字符截断；单次 IPC 最多 500 块 / 500 万字符。
 - 提交：`search:indexBegin` 清空旧块并把 `indexed_at` 置空 → 多次 `search:indexChunks`（单事务写入）→ `search:indexFinish` 写时间戳。FTS 由触发器同步。
 - 章节标题取 TOC 中与 href 对应的标题，取不到时用 `第 N 节`。
-- 索引中途失败或被取消时不写 `indexed_at`，下次打开重新索引。
+- 中途失败或被取消时不写 `indexed_at`，任务失败后重试；PDF 导入时直接写 `indexed_at`，不进入队列。
 - 重新导入同一本书（不同 sha256）视为新书，各自索引。
 
 查询：
@@ -413,12 +468,14 @@ for each annotation:
 
 排序按 `chapterIndex`，同章按 CFI；跨段落同组标注各自成段。空标注也生成带 front matter 的文件，明确写「这本书还没有标注」。
 
+库导出（`export:library`）：不经过预览。用户选一个目录，主进程在其中新建 `Lumen-标注-YYYYMMDD-HHmm/`，遍历未删除的书，跳过没有标注的，按书名生成 `<书名>.md`；文件名非法字符替换为 `_`，同名追加 ` (2)`。任何一次写盘失败都整体报 `IO_ERROR` 并提示换目录，不静默跳过。
+
 ```markdown
 ---
 title: 书名
 author: 作者
 exported_at: 2026-10-21T12:00:00.000Z
-lumen_version: 0.1.0
+lumen_version: 0.2.0
 ---
 
 # 书名
@@ -433,6 +490,25 @@ lumen_version: 0.1.0
 
 ---
 ```
+
+### 6.9 PDF 阅读与标注
+
+```
+PdfViewer 挂载
+  ├─ api.readBookFile(bookId) → Uint8Array
+  ├─ pdf.js getDocument（worker 走本地 asset，cMap / standard_fonts 走 public/pdfjs/）
+  ├─ 建与总页数等长的占位页；按视口 ±700 px 懒渲染 canvas + TextLayer
+  ├─ 页码 = 第一个 offsetTop 不超过视口顶部的页；进度按 page / numPages
+  ├─ 目录 = pdf.getOutline() → 递归展平 → 目标解析成页码，href 记为 page-<n>
+  ├─ 元数据：info.Title / info.Author → books:updateMeta（只允许改 PDF）
+  └─ 标注：quote 在该页文字层里 findBestQuote → Range.getClientRects → 绝对定位方块
+```
+
+- 缩放 60%–220%，改变宽度时取消未完成的 `RenderTask`、清空旧画布，按新宽度重排并保持当前页在视口内。
+- 配色沿用四套主题；夜间模式用 CSS 滤镜反转页面，扫描件可能偏暗，设置面板里有说明。
+- 选中只允许在同一页内：跨页选择直接提示「请分两次选」。`quote` 取 `range.toString()` 归一化后的文本，`prefix` / `suffix` 从该页文字层取 32 字。
+- 书签记当前页码；侧栏点击标注会滚到对应页。
+- 进度 400 ms 防抖写入，退出前 flush；`books.page_count` 与标题作者一起回填，书架不再显示「未命名」。
 
 ## 7. IPC 契约
 
@@ -455,6 +531,7 @@ type Result<T> = Ok<T> | Err
 | `books:get` | `{ id }` | `ShelfBook` |
 | `books:readFile` | `{ id }` | `ArrayBuffer` |
 | `books:readCover` | `{ id }` | `{ mime, data: ArrayBuffer } \| null` |
+| `books:updateMeta` | `{ id, title?, author?, pageCount? }` | `ShelfBook`（只接受 PDF） |
 | `books:remove` | `{ id, purge?: boolean }` | `null` |
 | `books:touch` | `{ id }` | `null` |
 | `progress:get` | `{ bookId }` | `Progress \| null` |
@@ -467,6 +544,10 @@ type Result<T> = Ok<T> | Err
 | `search:indexBegin` | `{ bookId }` | `null` |
 | `search:indexChunks` | `{ bookId, chunks: IndexChunk[] }` | `null` |
 | `search:indexFinish` | `{ bookId }` | `null` |
+| `indexer:request` | `{ bookId }` | `null`（去重后排入后台队列） |
+| `indexer:next` | — | `IndexerJob \| null`（隐藏窗口领取任务） |
+| `indexer:release` | `{ bookId }` | `null`（归还任务，不计重试） |
+| `indexer:complete` | `{ bookId, ok }` | `null`（主进程广播 `indexer:indexed`） |
 | `search:query` | `{ q, scope: 'text' \| 'annotations', tagId?, limit? }` | `SearchHit[]` |
 | `tags:list` | — | `Tag[]` |
 | `tags:create` | `{ name }` | `Tag` |
@@ -479,6 +560,9 @@ type Result<T> = Ok<T> | Err
 | `notes:save` | `{ id?, bookId, title, bodyMd }` | `Note` |
 | `notes:delete` | `{ id }` | `null` |
 | `export:bookAnnotations` | `{ bookId, ids?: string[] }` | `{ markdown, count }` |
+| `export:library` | — | `{ path, files } \| null`（取消时 null） |
+| `app:openFiles`（主进程 → 渲染层） | `string[]` | — |
+| `indexer:indexed`（主进程 → 渲染层） | `bookId: string` | — |
 
 错误码：`DUPLICATE`、`ENCRYPTED`、`UNSUPPORTED`、`TOO_LARGE`、`PARSE_FAILED`、`NOT_FOUND`、`DB_ERROR`、`IO_ERROR`、`INTERNAL`。渲染层按 `code` 决定下一步提示，不解析 `message`。
 
@@ -490,24 +574,28 @@ type Result<T> = Ok<T> | Err
 App
 ├─ 顶栏              书架 / 搜索 / 笔记切换、导入、数据目录、版本号
 ├─ ShelfView          书库：网格、筛选、拖放导入、移除
-├─ ReaderView
+├─ ReaderView（EPUB / Markdown / TXT）
 │  ├─ 顶栏            返回、书名、目录、标注、书签、排版设置
-│  ├─ EpubCanvas      epub.js 挂载点 + 点击翻页层
+│  ├─ EpubCanvas      epub.js 挂载点 + 点击翻页层（分页 / 滚动）
 │  ├─ TocDrawer       目录（递归展平、当前章高亮）
 │  ├─ AnnotationRail  侧栏：按章节分组的全部标注、多选、导出
 │  ├─ SelectionMenu   选中浮动工具条（四色高亮、批注、复制）
 │  ├─ NoteEditor      Markdown 文本域 + 预览、标签、删除
 │  └─ ExportDialog    导出预览、复制、保存
+├─ PdfViewer（PDF）   缩放、懒渲染、页码进度、目录、同一套标注侧栏
+├─ IndexWorker        隐藏窗口专用：循环领任务、建索引后回报
 ├─ SearchView         跨书搜索（正文 / 标注、标签过滤）
 └─ NotesView          独立笔记与标签管理
 ```
 
+索引窗口与主界面共用 `src/main.tsx` 入口：查询参数 `worker=index` 时只挂载 `IndexWorker`，其余情况挂载 `App`。它不渲染任何可见内容，也不订阅界面状态。
+
 状态策略：
 
 - 全部用函数组件 + `useState`/`useCallback`，不引入全局 store；跨组件共享靠 props 与回调。
-- 阅读器状态（`rendition`、`book`、当前 locator、选中状态）留在 `ReaderView` 内的 ref，不进 React 树，避免每次翻页导致整页重渲染。
-- 跨视图通知只有三种：`refresh()` 重新拉取、`onExit` 回书架、`onIndexed` 更新书架索引标记。
-- 搜索条件放在 `sessionStorage` 的 `lumen:search`，返回搜索页时保留输入；阅读偏好与上次打开的书在 `localStorage`。
+- 阅读器状态（`rendition`、`book`、当前 locator、选中状态）留在 `ReaderView` / `PdfViewer` 内的 ref，不进 React 树，避免每次翻页导致整页重渲染。
+- 跨视图通知只有四种：`refresh()` 重新拉取、`onExit` 回书架、`onIndexed` 更新书架索引标记、窗口间 `indexer:indexed` 广播。
+- 搜索条件放在 `sessionStorage` 的 `lumen:search`，返回搜索页时保留输入；阅读偏好（含分页 / 滚动）、上次打开的书在 `localStorage`。
 
 ## 9. 安全与隐私
 
@@ -518,18 +606,21 @@ App
 | 协议 | 生产用 `lumen://` 自定义协议加载 `dist`，避免 `file://` 源不稳定导致数据目录漂移 |
 | 外链 | `setWindowOpenHandler` 一律 `deny`；`will-navigate` 只允许应用自身源；`shell.openExternal` 仅接受 `https:` |
 | 网络 | `session.defaultSession.webRequest.onBeforeRequest` 白名单见 §12，其余 `cancel` 并写 `userData/logs/network.log` |
-| CSP | `default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'` |
+| CSP | `default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; media-src 'self' blob:; connect-src 'self'; worker-src 'self' blob:; form-action 'none'; frame-src 'none'; base-uri 'none'` |
 | 书内 HTML | 在 iframe 内渲染，沙箱由 epub.js 控制；不向主窗口注入书内内容 |
 | Markdown | 渲染后 `dompurify`，禁用 `<script>`、`<iframe>`、事件属性 |
 
 ## 10. 构建与打包
 
 - `electron-vite build` 产出 `dist/main`、`dist/preload`、`dist/renderer`。
+- `predev` / `prebuild` 先跑 `scripts/copy-pdfjs-assets.mjs`：把 `pdfjs-dist` 的 `cmaps/` 与 `standard_fonts/` 复制到 `public/pdfjs/`，Vite 再原样带进 `dist/renderer/pdfjs/`。这两份资源不进版本库，缺了它们中文等非嵌入字体的 PDF 会显示方块或取不到文字。
+- pdf.js 的 worker 由 Vite 打包成独立 `.mjs` 资产（`pdf.worker.min-*.mjs`），`GlobalWorkerOptions.workerSrc` 指向它；CSP 的 `worker-src 'self' blob:` 不能删。
+- 渲染层入口会把 `pdfjs-dist` 一并打进主 chunk（约 1.3 MB），构建时的 chunk 体积警告可忽略；不为它单独拆包，避免首屏多一次请求。
 - `electron-builder` 配置在 `package.json` 的 `build` 字段：
   - `files`: `dist/**/*`、`package.json`
   - `win.target`: `nsis` + `zip`，均 x64；`nsis.oneClick: false`、`perMachine: false`、`allowToChangeInstallationDirectory: true`、`createDesktopShortcut: true`
   - 产物命名：`nsis.artifactName = Lumen-${version}-setup.${ext}`；`win.artifactName = Lumen-${version}-portable.${ext}`（zip 没有独立配置段，用平台级命名，NSIS 再覆盖）
-  - 中间目录 `../lumen-desktop-build/`（项目同级，避开编辑器和杀毒软件锁定 `.asar`），`npm run collect` 只把**当前版本**的产物复制回仓库内 `desktop-dist/`，并跳过只有几百 KB 的卸载器中间文件
+  - 中间目录 `../lumen-next-desktop-build/`（与项目目录同名，避开编辑器和杀毒软件锁定 `.asar`；同时避免与并列存放的旧 lumen 仓库共用产物目录），`npm run collect` 只把**当前版本**的产物复制回仓库内 `desktop-dist/`，并跳过只有几百 KB 的卸载器中间文件
   - `npm run pack:portable` 只打 zip：本机开启智能应用控制时，electron-builder 需要运行一个临时 exe 来导出卸载器，这一步会被拦截（`spawn UNKNOWN`），安装包交给 CI 生成
 - 原生模块：**没有**。`node:sqlite` 随 Electron 一起分发，升级 Electron 时只需确认 `PRAGMA` 与 FTS5 仍可用（`npm run probe:fts` 会顺带打印 SQLite 版本）。
 - 图标：`scripts/make-icon.mjs` 纯 Node 生成 `build/icon.ico` 与 `icon.png`，不引入图形库；`build/` 不进版本库。
@@ -564,8 +655,8 @@ git tag v* → .github/workflows/release.yml（windows-latest）
 
 | 常量 | 值 | 位置 |
 | --- | --- | --- |
-| 应用版本 | `0.1.0`（M4 首次公开发布），版本节奏见 PRD §1.2 | `package.json` |
-| 数据库 schema 版本 | `1` | `PRAGMA user_version` |
+| 应用版本 | `0.2.0`（V1 发布），版本节奏见 PRD §1.2 | `package.json` |
+| 数据库 schema 版本 | `2` | `PRAGMA user_version` |
 | 单文件导入上限 | 200 MB | `electron/library/import.ts` |
 | 内存 EPUB 缓存数量 | 3 | `src/lib/convert/text-epub.ts` |
 | 进度写入防抖 | 400 ms | `src/reader/ReaderView.tsx` |
@@ -575,8 +666,16 @@ git tag v* → .github/workflows/release.yml（windows-latest）
 | 上下文长度 | 32 字 | `shared/locator.ts` |
 | 搜索默认条数 | 50，上限 200 | `electron/ipc/search.ts` |
 | 短查询 LIKE 阈值 | 查询长度 < 3 字符时走 `LIKE`，≥3 走 `MATCH` | `shared/search-query.ts` |
-| 索引触发延迟 | 2.5 s 空闲 | `src/reader/ReaderView.tsx` |
+| 索引触发 | 导入成功、打开未索引的书、启动扫描三处排队 | `electron/indexer.ts` |
+| 索引重试上限 | 2 次；失败 4 s 后重试 | `electron/indexer.ts` |
+| 索引任务租约 | 180 s | `electron/indexer.ts` |
+| 索引窗口空闲关闭 | 20 s | `electron/indexer.ts` |
+| 索引窗口轮询 | 空闲 1.2 s，出错 2 s | `src/reader/IndexWorker.tsx` |
 | 索引批量 | 每批 30 万字符；单章截断 50 万字符 | `src/reader/indexer.ts` |
+| PDF 缩放范围 | 0.6–2.2，步长 0.15 | `src/reader/PdfViewer.tsx` |
+| PDF 标注校验上限 | 200 条 | `src/reader/PdfViewer.tsx` |
+| PDF 进度防抖 | 400 ms | `src/reader/PdfViewer.tsx` |
+| PDF 预渲染距离 | 视口上下各 700 px | `src/reader/PdfViewer.tsx` |
 | 单次索引上限 | 500 块 / 500 万字符 | `electron/ipc/search.ts` |
 | 标签名上限 | 40 字 | `electron/ipc/tags.ts` |
 | 单条标注标签数上限 | 20 | `electron/ipc/tags.ts` |
@@ -598,7 +697,7 @@ git tag v* → .github/workflows/release.yml（windows-latest）
 | `shared/locator.ts` | 纯函数单测：quote/prefix/suffix 生成、归一化、Jaccard 打分、候选选择 |
 | 章节切分与 Markdown 转换 | 输入固定文本，断言生成的章节数、标题、XHTML 结构 |
 | 搜索语句构造 | 断言长查询、短查询、含引号与 `*` 的查询被正确转义 |
-| 迁移执行 | 在内存数据库上从 0 迁到最新，断言表与索引存在 |
+| 迁移执行 | 在内存数据库上从 0 迁到最新，断言表与索引存在；`002_pdf` 断言 `format` 接受 `pdf`、`page_count` 存在 |
 | 导出格式 | 固定标注集合 → 断言 Markdown 快照 |
 
 不做 E2E：epub.js 的分页依赖真实 Chromium，改用 PRD §9 的清单手测，必要时用 `--remote-debugging-port` 走 CDP 抽查。
@@ -607,11 +706,14 @@ git tag v* → .github/workflows/release.yml（windows-latest）
 
 | 限制 | 现状 | 后续 |
 | --- | --- | --- |
-| PDF | 不支持 | V1 引入 pdf.js，标注单独一套 locator（页码 + 矩形坐标） |
+| PDF | 支持阅读、目录、书签与同页标注；不参与全文检索 | 书内搜索与 OCR 另议 |
+| PDF 跨页选择 | 不支持，提示分两次选 | 需要多页区间模型，收益低 |
+| 扫描件 PDF | 没有文字层，不能选中与标注 | 不做 OCR |
 | 固定版式 EPUB | 不支持 | 不做 |
-| 首次搜索前需要索引 | 打开一本书后才索引，未打开的书搜不到 | V1 做隐藏窗口批量索引 |
+| 首次搜索前需要索引 | 导入即排队，但大书仍需几十秒 | 索引进度条与失败重试入口 |
 | trigram 索引体积 | 50 万字实测 1.47 倍（重复语料） | 用真实书复核，超 3 倍再改索引范围 |
 | `node:sqlite` 处于实验阶段 | API 可能随 Node/Electron 版本变化 | 全部调用收在 `electron/db/`，升级 Electron 时跑 `probe:fts` 与冒烟 |
+| 滚动模式的内部容器 | 通过 `rendition.manager.container` 访问 epub.js 内部对象 | epub.js 升级时若改名，退回键盘翻页并记录 |
 | 书内链接 | 脚注可能被翻页热区覆盖 | 扩大热区避让，见阅读器实现 |
 | 代码签名 | 未签名 | 购买证书后设置 `CSC_LINK`，Actions 加签名步骤 |
 | 本机打包 NSIS | 开启智能应用控制时，卸载器导出步骤被拦截（`spawn UNKNOWN`） | `npm run pack:portable` 只打 zip；安装包由 CI 生成 |

@@ -11,6 +11,7 @@ type BookRow = {
   size: number
   cover_path: string | null
   chapter_count: number
+  page_count: number
   indexed_at: number | null
   added_at: number
   last_opened_at: number | null
@@ -33,6 +34,7 @@ function toBook(row: BookRow): Book {
     size: row.size,
     coverPath: row.cover_path,
     chapterCount: row.chapter_count,
+    pageCount: row.page_count,
     indexedAt: row.indexed_at,
     addedAt: row.added_at,
     lastOpenedAt: row.last_opened_at,
@@ -62,8 +64,8 @@ export function findByHash(db: Db, sha256: string): Book | null {
 export function insertBook(db: Db, book: Book): void {
   db.prepare(
     `INSERT INTO books (id, title, author, format, file_path, sha256, size, cover_path,
-                        chapter_count, indexed_at, added_at, last_opened_at, deleted_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                        chapter_count, page_count, indexed_at, added_at, last_opened_at, deleted_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     book.id,
     book.title,
@@ -74,6 +76,7 @@ export function insertBook(db: Db, book: Book): void {
     book.size,
     book.coverPath,
     book.chapterCount,
+    book.pageCount,
     book.indexedAt,
     book.addedAt,
     book.lastOpenedAt,
@@ -119,4 +122,29 @@ export function countBooks(db: Db): number {
     n: number
   }
   return row.n
+}
+
+/**
+ * PDF 的元数据由渲染层用 pdf.js 读出后回填。只允许改 PDF：
+ * EPUB / TXT 的标题作者在导入时已经定好，不能被书内内容悄悄覆盖。
+ */
+export function updatePdfMeta(
+  db: Db,
+  id: string,
+  patch: { title?: string; author?: string; pageCount?: number },
+): void {
+  db.prepare(
+    `UPDATE books
+     SET title = COALESCE(?, title),
+         author = COALESCE(?, author),
+         page_count = COALESCE(?, page_count)
+     WHERE id = ? AND format = 'pdf' AND deleted_at IS NULL`,
+  ).run(
+    patch.title?.trim() || null,
+    patch.author?.trim() || null,
+    typeof patch.pageCount === 'number' && Number.isFinite(patch.pageCount)
+      ? Math.max(0, Math.trunc(patch.pageCount))
+      : null,
+    id,
+  )
 }
