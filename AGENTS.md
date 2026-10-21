@@ -8,7 +8,7 @@ Lumen：本地优先的阅读、标注与知识库桌面应用（Windows，Elect
 
 无账号、无云端、零网络请求。产品边界见 [PRD.md](./PRD.md)，实现细节见 [TECH_DESIGN.md](./TECH_DESIGN.md)。
 
-当前状态：**M4（0.1.0）实现完成，待推送 `v0.1.0` 标签**——导入 EPUB / Markdown / TXT、书架、epub.js 分页、目录、进度续读、排版与配色、高亮批注书签、侧栏、重锚、跨书全文搜索、标签、独立笔记、导出 Markdown、打包配置与官网均可用。动手前先看 `docs/IMPLEMENTATION_PROMPT.md` 的里程碑顺序；V1（0.2.0，PDF 等）尚未开始。
+当前状态：**M4（0.1.0）实现与本地验收完成，待推送 `v0.1.0` 标签**——导入 EPUB / Markdown / TXT、书架、epub.js 分页、目录、进度续读、排版与配色、高亮批注书签、侧栏、重锚、跨书全文搜索、标签、独立笔记、导出 Markdown、打包配置与官网均可用。`desktop-dist/` 已有 `Lumen-0.1.0-setup.exe` 与 `Lumen-0.1.0-portable.zip`，`site/src/data/releases.json` 的资产大小与 SHA-256 已回填。推送标签后由 Actions 重新构建、创建 Release 并部署官网。动手前先看 `docs/IMPLEMENTATION_PROMPT.md` 的里程碑顺序；V1（0.2.0，PDF 等）尚未开始。
 
 ## 命令
 
