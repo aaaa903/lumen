@@ -4,7 +4,22 @@
 
 没有账号，没有云端，没有任何网络请求。书、标注、笔记都存在你自己的机器上。
 
-> 状态：v0.1 规划中。本仓库是重写版，逐步取代旧仓库 v0.2 的纯阅读器；在功能对齐之前，旧版本仍是可用的正式版。
+> 状态：v0.0.1（M0 骨架）。本仓库是重写版，逐步取代旧仓库 v0.2 的纯阅读器；在功能对齐之前，旧版本仍是可用的正式版。
+
+## 版本号
+
+`package.json` 的 `version` 是唯一来源，界面、安装包与官网都从这里派生。
+
+| 阶段 | 版本号 |
+| --- | --- |
+| M0 骨架（当前） | `0.0.1` |
+| M1 导入与阅读 | `0.0.2` |
+| M2 标注 | `0.0.3` |
+| M3 知识库 | `0.0.4` |
+| 首次公开发布 | `0.1.0` |
+| V1（PDF 等） | `0.2.0` |
+
+每个里程碑结束都要改 `version`、打 `v<version>` 标签，并同步 `PRD.md` §10 的状态。开发期里程碑不建 Release。
 
 ## 文档
 
@@ -34,7 +49,7 @@ MVP 做四件事：**读得进去、划得下来、搜得到、带得走**。
 | 层 | 选择 | 理由 |
 | --- | --- | --- |
 | 桌面壳 | Electron | 与旧版一致，epub.js 依赖完整 Chromium 渲染 |
-| 主进程 | TypeScript + `better-sqlite3` | 同步 API 简单可靠，SQLite 自带 FTS5 与 trigram 分词，中文可搜子串 |
+| 主进程 | TypeScript + Electron 内置 `node:sqlite` | 同一个 SQLite 3.53.4，自带 FTS5 与 trigram；无需原生模块编译，也不会 ABI 失配 |
 | 渲染层 | React 19 + TypeScript strict + Vite（`electron-vite`） | 沿用旧版组件风格，主进程也能直接写 TS |
 | EPUB 渲染 | `epub.js` | 不自研解析与分页 |
 | Markdown / TXT | 转成内存 EPUB 后复用同一条渲染链路 | 旧版已验证；避免维护两套阅读器 |
@@ -52,7 +67,20 @@ npm test             # Vitest
 npm run db:inspect   # 打开当前用户数据目录下的 lumen.db（只读）
 ```
 
-`better-sqlite3` 是原生模块，`npm install` 后会针对 Electron 的 ABI 重建；换 Node 版本或升级 Electron 后需要重新执行 `npm rebuild`。
+项目不包含原生模块：数据库用的是 Electron 自带的 `node:sqlite`，因此不需要 `node-gyp`、Visual Studio Build Tools，升级 Electron 也不会出现 ABI 失配。
+
+国内网络下 `npm install` 可能很慢（连 npmjs 单个元数据请求就要数秒），可以换镜像：
+
+```powershell
+npm install --registry=https://registry.npmmirror.com
+```
+
+若 Electron 二进制没有下载成功（npm 11 会默认跳过部分安装脚本），手动补一次：
+
+```powershell
+$env:ELECTRON_MIRROR='https://npmmirror.com/mirrors/electron/'
+node node_modules/electron/install.js
+```
 
 ## 打包与发布
 

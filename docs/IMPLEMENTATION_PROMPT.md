@@ -23,7 +23,7 @@ Lumen 是一个 Windows 桌面应用：本地优先的阅读、标注与知识�
 
 - Electron ≥ 44，`contextIsolation: true`、`sandbox: true`、`nodeIntegration: false`
 - 主进程 TypeScript，由 `electron-vite` 构建；渲染层 React 19 + Vite
-- 数据库 `better-sqlite3`，只在主进程使用；WAL；`PRAGMA user_version` 管理迁移
+- 数据库用 Electron 内置 `node:sqlite`，只在主进程使用；WAL；`PRAGMA user_version` 管理迁移；事务统一走 `withTransaction`
 - 全文搜索用 FTS5 `trigram` 分词
 - EPUB 用 `epub.js`；Markdown / TXT 转内存 EPUB 复用同一渲染链路
 - 批注编辑器 CodeMirror 6；Markdown 渲染 `markdown-it` + `dompurify`
@@ -35,7 +35,7 @@ Lumen 是一个 Windows 桌面应用：本地优先的阅读、标注与知识�
 1. `npm run typecheck`、`npm test`、`npm run build` 必须全部通过后才算完成一个里程碑。
 2. 所有 SQL 参数化；所有 IPC 入参在主进程校验。
 3. 界面文案与注释用中文，全角标点，错误信息给出下一步。
-4. 渲染层代码里不得出现 `require`、`fs`、`better-sqlite3`、`process`。
+4. 渲染层代码里不得出现 `require`、`fs`、`node:sqlite`、`process`。
 5. 不发起任何外部网络请求；主进程的请求拦截器必须在 M0 就位。
 6. 每完成一个里程碑，同步更新 `PRD.md` / `TECH_DESIGN.md` / `AGENTS.md` 中受影响的内容，并在回复里列出改了哪些文档。
 7. 不要为了「以后可能用到」提前抽象。PDF、双向链接、批量索引都不在 MVP。
@@ -107,7 +107,7 @@ Lumen 是一个 Windows 桌面应用：本地优先的阅读、标注与知识�
 
 - 每个里程碑：先给出改动文件清单，再改代码，最后给出验证命令与结果。
 - 不要修改 `node_modules` 里的第三方源码。
-- 遇到无法在本仓库内解决的平台问题（如原生模块构建失败），先给出诊断与两条备选方案，再等确认。
+- 遇到无法在本仓库内解决的平台问题（如 Electron 二进制下载失败、`node:sqlite` 在某版本不可用），先给出诊断与两条备选方案，再等确认。
 - 回复里必须包含：改了什么、怎么验证的、已知取舍、下一步。
 
 ## 验收场景（原文，来自 PRD §8）

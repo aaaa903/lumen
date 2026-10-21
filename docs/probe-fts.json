@@ -1,0 +1,99 @@
+{
+  "generatedAt": "2026-10-21T13:10:40.146Z",
+  "runtime": "Electron 44.9.3 / Node 24.22.0",
+  "corpus": {
+    "chars": 500310,
+    "chunks": 459
+  },
+  "sizes": {
+    "plainTableBytes": 1888256,
+    "ftsTableBytes": 2777088,
+    "ratio": 1.47
+  },
+  "insert": {
+    "plainMs": 6.8,
+    "ftsMs": 35.6
+  },
+  "queries": {
+    "中文 2 字：灯光": {
+      "like": {
+        "ms": 0.45,
+        "hits": 153
+      }
+    },
+    "中文 2 字：书店": {
+      "like": {
+        "ms": 0.64,
+        "hits": 0
+      }
+    },
+    "中文 3 字：旧车票": {
+      "match": {
+        "ms": 0.02,
+        "hits": 153
+      },
+      "like": {
+        "ms": 0.45,
+        "hits": 153
+      }
+    },
+    "中文 4 字：木地板": {
+      "match": {
+        "ms": 0.02,
+        "hits": 153
+      },
+      "like": {
+        "ms": 0.43,
+        "hits": 153
+      }
+    },
+    "中文 6 字：玻璃上缓慢": {
+      "match": {
+        "ms": 0.07,
+        "hits": 153
+      },
+      "like": {
+        "ms": 0.43,
+        "hits": 153
+      }
+    },
+    "英文单词：library": {
+      "match": {
+        "ms": 0.11,
+        "hits": 153
+      },
+      "like": {
+        "ms": 0.46,
+        "hits": 153
+      }
+    },
+    "不存在的词：鲸鱼骨": {
+      "match": {
+        "ms": 0.01,
+        "hits": 0
+      },
+      "like": {
+        "ms": 0.62,
+        "hits": 0
+      }
+    },
+    "MATCH 2 字行为": {
+      "match": {
+        "ms": 0,
+        "hits": 0
+      }
+    },
+    "对照组 LIKE（无索引）": {
+      "like": {
+        "ms": 0.51,
+        "hits": 153
+      }
+    }
+  },
+  "sqlite": "3.53.4",
+  "rank": {
+    "ms": 0.2,
+    "rows": 10
+  },
+  "snippet": "…里夹着一张<mark>旧车票</mark>。书架最上层…"
+}

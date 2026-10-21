@@ -24,7 +24,7 @@
 | --- | --- | --- |
 | 桌面壳 | Electron | ≥ 44 |
 | 主进程语言 | TypeScript（由 `electron-vite` 编译） | 与渲染层同一 `tsconfig` |
-| 数据库 | `better-sqlite3` + FTS5 | SQLite ≥ 3.45（含 trigram 分词） |
+| 数据库 | Electron 内置 `node:sqlite` + FTS5 | 实测 SQLite 3.53.4，含 `trigram` 分词；无原生模块，不需要 ABI 重建 |
 | 构建 | `electron-vite` + Vite | 主进程、预加载、渲染层三份产物 |
 | 界面 | React 19 | 函数组件 + hooks |
 | EPUB | `epub.js` | 0.3.x |
@@ -37,12 +37,13 @@
 
 | 依赖 | 为什么不能用现有栈 | 体积（gzip） |
 | --- | --- | --- |
-| `better-sqlite3` | 需要事务、FTS5、单文件数据库；IndexedDB 无全文检索，也不适合十万级标注 | 运行时原生模块约 2 MB |
 | `electron-vite` | 主进程写 TS 需要一个打包步骤；比自建 `tsup + 重启脚本` 更少出错 | devDependency |
 | `markdown-it` | 渲染批注与笔记，`epub.js` 自带的 XHTML 处理不适用 | ~30 KB |
 | `dompurify` | Markdown 渲染结果必须消毒，避免书内 HTML 注入界面 | ~20 KB |
 | `@codemirror/*` | 需要一个可控的 Markdown 编辑器；避免引入完整编辑器框架 | ~120 KB |
 | `vitest` | 重锚与搜索语句构造必须有单测 | devDependency |
+
+**不引入 `better-sqlite3`。** 它在 Windows 上需要 Visual Studio Build Tools 编译，本机与 CI 都没有；而 Electron 44 自带的 `node:sqlite` 是同一个 SQLite（3.53.4），已编入 FTS5 与 `trigram`，且不需要 ABI 重建。代价是 API 仍标记为实验阶段，因此全部数据库调用收在 `electron/db/open.ts` 与 `electron/db/repositories/` 内，将来换驱动只动这一层。
 
 不引入：状态管理库（React 自带 `useReducer` 足够）、UI 组件库、CSS-in-JS、ORM、i18n 框架。
 
@@ -66,7 +67,7 @@
 
 硬边界：
 
-- `better-sqlite3` 只在 `electron/main/db/` 下出现，渲染层若出现会构建失败（ESLint 规则 + CI 检查）。
+- `node:sqlite` 只在 `electron/db/` 下出现；渲染层引用该模块会构建失败（CI 检查 `src/` 中不出现）。
 - `epub.js` 只在 `src/reader/` 下出现。
 - 渲染层通过 `lib/api.ts` 调用 `window.lumen`，组件不直接写 `window.lumen`。
 - 网络拦截在 `session.defaultSession.webRequest`，白名单见 §12。
@@ -94,7 +95,11 @@ electron/
     covers.ts              封面提取与缩略图
   security/
     network.ts             请求拦截
-  window.ts                窗口状态记忆
+  window.ts                窗口状态记忆（M1）
+shared/
+  types.ts                 主进程与渲染层共用的类型
+  locator.ts               标注定位与重锚（M2）
+  search-query.ts          搜索语句构造（M3）
 src/
   main.tsx                 React 挂载
   App.tsx                  路由：书架 / 阅读器 / 搜索 / 笔记
@@ -109,14 +114,15 @@ src/
     api.ts                 类型化 IPC 客户端
     format.ts              体积、百分比、相对时间
     convert/               Markdown / TXT → 内存 EPUB
+  global.d.ts              window.lumen 类型声明
   styles.css
-db/                        设计期 schema 快照（与 migrations 同步，供评审阅读）
-docs/
+docs/                      实施与官网提示词、FTS 实测结论
 site/                      官网（Astro 静态站，独立 package）
 scripts/
-  make-sample-epub.mjs
   make-sample-library.mjs  生成 5 本书用于搜索与性能验证
-  make-icon.mjs
+  probe-fts.cjs            FTS5 trigram 实测（npm run probe:fts）
+  db-inspect.cjs           只读查看当前数据库（npm run db:inspect）
+  make-icon.mjs            应用图标（M4）
 build/                     打包图标（不进版本库）
 ```
 
@@ -372,7 +378,7 @@ for each annotation:
 
 `MATCH` 的参数做引号转义：把查询串里的 `"` 去掉，整体包成 `"..."`，避免 FTS 语法注入。高亮片段用 `snippet(search_fts, 0, '<mark>', '</mark>', '…', 12)`。
 
-已知代价：trigram 索引体积约为正文的 3 倍。M0 阶段用 `scripts/make-sample-library.mjs` 生成 5 本共 50 万字验证，若体积或查询耗时超预算，退回「中文按字切分 + 自建倒排」，代价是体积更大但可控。
+已知代价（2026-10-21 实测，详见 `docs/probe-fts.md`）：50 万字语料下 trigram 表为普通表的 1.47 倍（语料重复度高，属乐观值），建索引 36 ms，3 字以上 `MATCH` 0.02–0.12 ms，2 字 `LIKE` 0.45–0.64 ms。因此短查询直接走 `LIKE`，不另建倒排；M3 需用真实书籍复核索引体积，超过正文 3 倍时再考虑只索引标注所在章节。
 
 ### 6.8 导出
 
@@ -474,11 +480,10 @@ App
 - `electron-vite build` 产出 `dist/main`、`dist/preload`、`dist/renderer`。
 - `electron-builder` 配置：
   - `files`: `dist/**`、`package.json`
-  - `asarUnpack`: `**/node_modules/better-sqlite3/**`、`**/node_modules/**/*.node`
   - `win.target`: `nsis` + `zip`；`nsis.oneClick: false`、`allowToChangeInstallationDirectory: true`
   - `artifactName`: `${productName}-${version}-${os}-${arch}.${ext}` 会与命名约定冲突，改用显式 `nsis.artifactName` 与 `zip` 后重命名脚本
   - 目标目录 `../lumen-desktop-build/`，最终复制到仓库内 `desktop-dist/`（沿用旧版避开编辑器占用 `.asar` 的经验）
-- 原生模块：CI 与本地都用 `electron-builder install-app-deps`，Electron 大版本升级后必须重新构建并跑一次冒烟。
+- 原生模块：**没有**。`node:sqlite` 随 Electron 一起分发，升级 Electron 时只需确认 `PRAGMA` 与 FTS5 仍可用（`npm run probe:fts` 会顺带打印 SQLite 版本）。
 - 图标：`scripts/make-icon.mjs` 纯 Node 生成 `build/icon.ico` 与 `icon.png`，不引入图形库。
 
 ## 11. 发布流水线
@@ -499,7 +504,7 @@ git tag v0.1.0 → GitHub Actions
 
 | 常量 | 值 | 位置 |
 | --- | --- | --- |
-| 应用版本 | `0.1.0` | `package.json` |
+| 应用版本 | `0.0.1`（M0 骨架），版本节奏见 PRD §1.2 | `package.json` |
 | 数据库 schema 版本 | `1` | `PRAGMA user_version` |
 | 单文件导入上限 | 200 MB | `electron/library/import.ts` |
 | 内存 EPUB 缓存数量 | 3 | `src/lib/convert/cache.ts` |
@@ -509,6 +514,7 @@ git tag v0.1.0 → GitHub Actions
 | quote 最大长度 | 500 字 | `shared/locator.ts` |
 | 上下文长度 | 32 字 | `shared/locator.ts` |
 | 搜索默认条数 | 50，上限 200 | `electron/ipc/search.ts` |
+| 短查询 LIKE 阈值 | 查询长度 < 3 字符时走 `LIKE`，≥3 走 `MATCH` | `shared/search-query.ts` |
 | 索引触发延迟 | 2 s 空闲 | `src/reader/indexer.ts` |
 | 缩略图最长边 | 480 px | `electron/library/covers.ts` |
 | 迁移备份保留 | 3 份 | `electron/db/open.ts` |
@@ -534,7 +540,8 @@ git tag v0.1.0 → GitHub Actions
 | PDF | 不支持 | V1 引入 pdf.js，标注单独一套 locator（页码 + 矩形坐标） |
 | 固定版式 EPUB | 不支持 | 不做 |
 | 首次搜索前需要索引 | 打开一本书后才索引，未打开的书搜不到 | V1 做隐藏窗口批量索引 |
-| trigram 索引体积 | 约为正文 3 倍 | M0 实测后定，超预算换方案 |
+| trigram 索引体积 | 50 万字实测 1.47 倍（重复语料） | M3 用真实书复核，超 3 倍再改索引范围 |
+| `node:sqlite` 处于实验阶段 | API 可能随 Node/Electron 版本变化 | 全部调用收在 `electron/db/`，升级 Electron 时跑 `probe:fts` 与冒烟 |
 | 书内链接 | 脚注可能被翻页热区覆盖 | 扩大热区避让，见阅读器实现 |
 | 代码签名 | 未签名 | 购买证书后设置 `CSC_LINK`，Actions 加签名步骤 |
 | macOS | 未构建 | V1 视需要 |

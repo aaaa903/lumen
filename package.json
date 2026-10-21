@@ -1,0 +1,78 @@
+{
+  "name": "lumen",
+  "version": "0.0.1",
+  "private": true,
+  "description": "本地优先的阅读、标注与知识库桌面应用",
+  "author": "TXY",
+  "license": "MIT",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "samples": "node scripts/make-sample-library.mjs",
+    "probe:fts": "electron scripts/probe-fts.cjs",
+    "db:inspect": "electron scripts/db-inspect.cjs",
+    "pack:dir": "npm run build && electron-builder --dir",
+    "pack": "npm run build && electron-builder --win"
+  },
+  "dependencies": {
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "electron": "^44.9.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^6.0.0",
+    "iconv-lite": "^0.6.3",
+    "jszip": "^3.10.2",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "vitest": "^3.2.4"
+  },
+  "build": {
+    "appId": "app.lumen.reader",
+    "productName": "Lumen",
+    "directories": {
+      "output": "../lumen-desktop-build",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Lumen",
+      "artifactName": "Lumen-${version}-setup.${ext}"
+    },
+    "zip": {
+      "artifactName": "Lumen-${version}-portable.${ext}"
+    }
+  }
+}

@@ -1,0 +1,203 @@
+:root {
+  color-scheme: light;
+  --paper: #f6f2ea;
+  --paper-raised: #fffdf8;
+  --paper-sunken: #efe9dd;
+  --ink: #221f1b;
+  --ink-soft: #5e564a;
+  --ink-faint: #918777;
+  --line: #e3dccf;
+  --accent: #8a5a3b;
+  --accent-soft: #f0e3d5;
+  --danger: #a4412f;
+  --radius: 14px;
+  --ui-font:
+    system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', 'Noto Sans CJK SC',
+    sans-serif;
+  --serif-font: 'Iowan Old Style', Georgia, 'Songti SC', 'SimSun', serif;
+  --mono-font: 'Cascadia Code', 'Consolas', 'SFMono-Regular', monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--ui-font);
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.app {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100%;
+}
+
+/* 顶栏 */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 56px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--paper-raised) 82%, transparent);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: var(--ink);
+  color: var(--paper-raised);
+  font-family: var(--serif-font);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.brand-name {
+  font-family: var(--serif-font);
+  font-size: 17px;
+  letter-spacing: 0.02em;
+}
+
+.badge {
+  padding: 2px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-faint);
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+}
+
+.topbar-spacer {
+  flex: 1;
+}
+
+.ghost-button {
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 13px;
+  transition:
+    background 140ms ease,
+    color 140ms ease;
+}
+
+.ghost-button:hover {
+  background: var(--paper-sunken);
+  color: var(--ink);
+}
+
+.ghost-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* 书架 */
+.shelf {
+  display: grid;
+  place-items: center;
+  padding: 32px 24px;
+  overflow: auto;
+}
+
+.empty {
+  max-width: 520px;
+  padding: 36px 36px 32px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper-raised);
+}
+
+.empty-kicker {
+  margin: 0 0 10px;
+  color: var(--ink-faint);
+  font-size: 12px;
+  letter-spacing: 0.16em;
+}
+
+.empty h1 {
+  margin: 0 0 12px;
+  font-family: var(--serif-font);
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.empty-body {
+  margin: 0 0 14px;
+  color: var(--ink-soft);
+}
+
+.empty-hint {
+  margin: 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-faint);
+  font-size: 13px;
+}
+
+code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--paper-sunken);
+  font-family: var(--mono-font);
+  font-size: 12.5px;
+}
+
+/* 状态栏 */
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 34px;
+  padding: 0 20px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+
+.status-line {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-error {
+  margin: 0;
+  color: var(--danger);
+}
+
+.status-version {
+  margin-left: auto;
+  font-family: var(--mono-font);
+}

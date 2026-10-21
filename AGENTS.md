@@ -13,7 +13,7 @@ Lumen：本地优先的阅读、标注与知识库桌面应用（Windows，Elect
 ## 命令（实现后应与此一致）
 
 ```bash
-npm install        # 安装依赖，并对 better-sqlite3 做 Electron ABI 重建
+npm install        # 安装依赖（无原生模块，不需要编译工具链）
 npm run dev        # Vite + Electron 窗口，渲染层热更新
 npm run typecheck  # tsc --noEmit，提交前必须过
 npm test           # Vitest 单测
@@ -23,6 +23,8 @@ npm run pack       # NSIS 安装包 + portable.zip → desktop-dist/
 npm run db:inspect # 只读打开当前用户数据目录下的 lumen.db，排查数据用
 node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字）
 ```
+
+调试渲染层：先设 `LUMEN_DEBUG_PORT=9223`（PowerShell 用 `$env:LUMEN_DEBUG_PORT='9223'`）再 `npm run dev`，然后通过 CDP 连 `http://127.0.0.1:9223/json/list` 检查页面与数据库状态。
 
 没有 E2E 框架。改动阅读器或标注行为后，按 PRD §9 清单手测关键几条，并在回复里说明测了哪些。桌面端可加 `--remote-debugging-port=9223` 用 CDP 检查渲染层与 IndexedDB / SQLite 状态。
 
@@ -51,7 +53,7 @@ node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字�
 | `site/` | 官网（Astro），独立 `package.json` | 改官网 |
 | `docs/` | 实施提示词与官网提示词 | 改交付方式 |
 
-约定：组件不直接调 `window.lumen`；`better-sqlite3` 不出现在 `src/`；`epub.js` 只出现在 `src/reader/`；书内 XHTML 拼接只出现在 `src/lib/convert/`。
+约定：组件不直接调 `window.lumen`；`node:sqlite` 不出现在 `src/`；`epub.js` 只出现在 `src/reader/`；书内 XHTML 拼接只出现在 `src/lib/convert/`。
 
 ## 硬性约定
 
@@ -68,7 +70,9 @@ node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字�
 
 - schema 变更必须：新建 `migrations/NNN_*.sql` + 提升 `PRAGMA user_version` + 在 `docs` 与本文同步。老数据兼容优先，宁加列不删列。
 - 迁移前自动备份数据库到 `userData/backups/`，保留最近 3 份。
-- 读路径默认过滤 `deleted_at IS NOT NULL` 的行；软删是默认，物理删除只发生在「彻底删除」与文件清理。
+- 读路径默认过滤 `deleted_at IS NOT NULL` 的行；软删是默认，物理删除只发生在「彻底删除」与文件清理。- 所有写事务走 `withTransaction(db, fn)`（`electron/db/open.ts`）；不要在业务代码里散落 `BEGIN` / `COMMIT`。
+- `db.exec()` 只用于迁移脚本与 `PRAGMA`；带参数的语句一律 `prepare().run/get/all`。
+- FTS 的 `MATCH` 参数只允许由 `shared/search-query.ts` 生成，禁止在调用点拼字符串。
 - 删书分两种：`books:remove({ purge: false })` 只写 `deleted_at`，标注与笔记保留；`purge: true` 才级联删除并删源文件。
 - 书籍原文件不存进数据库，只存相对路径；读写路径不要整本读进内存（除 epub.js 需要的 Blob）。
 - 进度写入必须防抖（400 ms）并 `flush` 后再退出阅读器，否则最后一次翻页丢失。
@@ -108,6 +112,7 @@ node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字�
 - [ ] 若改了搜索：测两字中文、英文单词、含引号查询、空结果
 - [ ] 若改了数据模型：旧库可迁移，或写清楚不兼容与迁移方式
 - [ ] 若改了桌面壳：`npm run pack` 成功，安装版与 portable.zip 都能启动并读到同一份数据
+- [ ] 若完成一个里程碑：改 `package.json` 的 `version`、更新 PRD §10 状态、打 `v<version>` 标签
 - [ ] 若改了行为：同步更新 PRD / TECH_DESIGN 对应章节
 - [ ] 回复里说明改了什么、怎么验证、有哪些已知取舍
 
@@ -115,7 +120,8 @@ node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字�
 
 | 现象 | 处理 |
 | --- | --- |
-| 启动报 `Cannot find module ... better-sqlite3` | 原生模块 ABI 不匹配，重跑 `electron-builder install-app-deps` 或 `npm rebuild` |
+| 启动报 `Cannot find module 'node:sqlite'` | 用了过旧的 Electron 或外部 Node 运行脚本；确认 Electron ≥ 44，脚本用 `npx electron scripts/xxx.cjs` 跑 |
+| `npm install` 卡在下载 Electron | 设置 `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/` 后执行 `node node_modules/electron/install.js` |
 | 数据库写入报 `SQLITE_BUSY` | 有第二个进程占用；确认单实例锁生效，检查是否遗留的 dev 窗口 |
 | 搜索中文无结果 | 确认 `search_chunks` 有数据（`books.indexed_at` 非空）、FTS 表存在、查询长度 < 3 时走了 LIKE 分支 |
 | 标注位置漂移 | 看该条 `quote` 是否为空、`orphaned` 是否为 1，重锚打分是否低于 0.6 |
@@ -131,7 +137,7 @@ node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字�
 - 不要引入外部字体、CDN、在线词典、AI 接口。
 - 不要自研 EPUB 解析或重写分页引擎。
 - 不要为了做 PDF 而提前抽象「通用文档模型」；V1 再说。
-- 不要在渲染层加载 `better-sqlite3`，也不要开 `nodeIntegration`、关 `contextIsolation`。
+- 不要在渲染层加载 `node:sqlite`，也不要开 `nodeIntegration`、关 `contextIsolation`。
 - 不要把业务逻辑塞进 `electron/main.ts`。
 - 不要把 `dist/`、`desktop-dist/`、`../lumen-desktop-build/`、`build/icon.*`、`node_modules/`、`public/sample*.epub` 提交进版本库。
 - 不要在没有单测的情况下改 `shared/locator.ts` 或搜索转义逻辑。
