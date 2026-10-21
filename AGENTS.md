@@ -186,6 +186,7 @@ node scripts/copy-pdfjs-assets.mjs     # 单独补 public/pdfjs/（predev / preb
 | 官网构建报「资产信息不完整」 | `releases.json` 缺少 `size` / `sha256`：先跑 `npm run release:assets`，或等发布工作流回填 |
 | 发布流水线打包步报 `GitHub Personal Access Token is not set` | electron-builder 在 tag 构建时尝试自行发布：`pack`/`pack:portable` 的 `--publish never` 不能删，Release 由 `action-gh-release` 创建 |
 | Pages 部署报 `Tag "v..." is not allowed to deploy to github-pages` | 仓库 Settings → Environments → github-pages 的部署分支策略只允许了 `main`：加一条 `v*`（tag）策略，或调 API `deployment-branch-policies` |
+| 发布流水线回写资产被拒（`fetch first`） | tag 构建默认是浅克隆，本地缺少远端 `main` 的提交：`actions/checkout` 必须设 `fetch-depth: 0`；若仍有并发推送，先 `git fetch origin main` 再推 |
 | 官网校验和与下载到的文件不一致 | `site/src/data/releases.json` 是本地构建的值：等发布工作流把 CI 构建的哈希回写到 `main`（提交信息 `chore: 回填 v* 资产信息`），再部署官网 |
 | Smart App Control 拦截 `setup.exe` | 未签名；改用 `Lumen-<version>-portable.zip`。不要为此关闭 Smart App Control |
 | 网络日志出现外部请求 | 立即定位来源，补进白名单以外的拦截测试；不允许以「只是开发期」为由放行 |

@@ -27,6 +27,9 @@ jobs:
     steps:
       - name: 检出
         uses: actions/checkout@v4
+        with:
+          # 回写资产信息要 push 到 main，浅克隆会因为本地缺少远端 main 的提交而被拒。
+          fetch-depth: 0
 
       - name: Node
         uses: actions/setup-node@v4

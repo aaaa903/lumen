@@ -14,10 +14,15 @@
         "上下方向键现在也能翻页，滚动模式下按一屏滚动"
       ],
       "assets": {
+        "setup": {
+          "name": "Lumen-0.2.0-setup.exe",
+          "size": 116996063,
+          "sha256": "a8851d60805e02c9bee12598a8654e83fe2a2a44fd16d3fd94fb35e9fef36f89"
+        },
         "portable": {
           "name": "Lumen-0.2.0-portable.zip",
-          "size": 161497203,
-          "sha256": "411fb9f35f38ede0c210956df924372d6ca704bda30544262e839e91f71df11c"
+          "size": 161474222,
+          "sha256": "fc7ec66b146051715f87ae8e4a205d982a045858f99c6f91800a391f6d731c88"
         }
       }
     },
