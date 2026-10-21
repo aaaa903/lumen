@@ -28,6 +28,7 @@ logs/
 .probe-fts/
 public/sample*.epub
 public/sample-library/
+release-notes.md
 
 # 编辑器与系统
 .vscode/*

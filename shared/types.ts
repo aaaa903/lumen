@@ -8,6 +8,8 @@ export type AppVersions = {
   node: string
   sqlite: string
   schema: number
+  /** 用户数据目录的绝对路径，设置页展示用。 */
+  userData: string
 }
 
 /** IPC 错误码。渲染层按码决定提示文案与下一步，不解析 message。 */
@@ -236,13 +238,21 @@ export type SaveTextInput = {
 export type LumenApi = {
   versions: () => Promise<IpcResult<AppVersions>>
   openUserData: () => Promise<IpcResult<null>>
+  /** 只允许 https 外链，交给系统浏览器；其余协议一律拒绝。 */
+  openExternal: (url: string) => Promise<IpcResult<null>>
+  /** 启动参数或第二实例带来的文件路径；渲染层挂载后取一次，避免早于订阅丢失。 */
+  takePendingFiles: () => Promise<IpcResult<string[]>>
+  /** 第二实例送来文件时触发；返回取消订阅函数。 */
+  onOpenFiles: (callback: (paths: string[]) => void) => () => void
+  /** 清空全部书、标注、笔记与索引；不可撤销。 */
+  clearData: () => Promise<IpcResult<null>>
   pickFiles: () => Promise<IpcResult<string[]>>
   importBooks: (paths: string[]) => Promise<IpcResult<ImportResult[]>>
   listBooks: () => Promise<IpcResult<ShelfBook[]>>
   getBook: (id: string) => Promise<IpcResult<ShelfBook>>
   readBookFile: (id: string) => Promise<IpcResult<ArrayBuffer>>
   readCover: (id: string) => Promise<IpcResult<{ mime: string; data: ArrayBuffer } | null>>
-  removeBook: (id: string) => Promise<IpcResult<null>>
+  removeBook: (id: string, purge?: boolean) => Promise<IpcResult<null>>
   touchBook: (id: string) => Promise<IpcResult<null>>
   getProgress: (bookId: string) => Promise<IpcResult<Progress | null>>
   saveProgress: (input: {

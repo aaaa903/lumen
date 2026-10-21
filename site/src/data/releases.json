@@ -1,0 +1,30 @@
+{
+  "latest": "0.1.0",
+  "releases": [
+    {
+      "version": "0.1.0",
+      "tag": "v0.1.0",
+      "date": "2026-10-21",
+      "notes": [
+        "首个公开版本：EPUB、Markdown、TXT 导入与分页阅读",
+        "目录、章节切换、进度续读与四套配色",
+        "高亮、批注、书签与按章节聚合的标注侧栏",
+        "跨书全文搜索、标签与独立笔记",
+        "把一本书的标注导出为 Markdown",
+        "提供安装包与免安装包，数据全部留在本机"
+      ],
+      "assets": {
+        "setup": {
+          "name": "Lumen-0.1.0-setup.exe",
+          "size": 0,
+          "sha256": ""
+        },
+        "portable": {
+          "name": "Lumen-0.1.0-portable.zip",
+          "size": 159639603,
+          "sha256": "3f6f827d144a35e87f86d2be61dd0af06fec72959a427db7efd7f2d46c0e9911"
+        }
+      }
+    }
+  ]
+}

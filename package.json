@@ -1,6 +1,6 @@
 {
   "name": "lumen",
-  "version": "0.0.4",
+  "version": "0.1.0",
   "private": true,
   "description": "本地优先的阅读、标注与知识库桌面应用",
   "author": "TXY",
@@ -14,8 +14,14 @@
     "samples": "node scripts/make-sample-library.mjs",
     "probe:fts": "electron scripts/probe-fts.cjs",
     "db:inspect": "electron scripts/db-inspect.cjs",
+    "icon": "node scripts/make-icon.mjs",
+    "collect": "node scripts/collect-desktop.mjs",
     "pack:dir": "npm run build && electron-builder --dir",
-    "pack": "npm run build && electron-builder --win"
+    "pack": "npm run build && electron-builder --win && npm run collect",
+    "pack:portable": "npm run build && electron-builder --win zip && npm run collect",
+    "site:build": "node site/build.mjs",
+    "release:assets": "node scripts/release-assets.mjs",
+    "release:notes": "node scripts/release-notes.mjs"
   },
   "dependencies": {
     "dompurify": "^3.4.17",
@@ -52,6 +58,7 @@
     ],
     "win": {
       "icon": "build/icon.ico",
+      "artifactName": "Lumen-${version}-portable.${ext}",
       "target": [
         {
           "target": "nsis",
@@ -74,9 +81,6 @@
       "createDesktopShortcut": true,
       "shortcutName": "Lumen",
       "artifactName": "Lumen-${version}-setup.${ext}"
-    },
-    "zip": {
-      "artifactName": "Lumen-${version}-portable.${ext}"
     }
   }
 }

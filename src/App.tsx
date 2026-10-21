@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { AppVersions, ImportResult, OpenTarget, ShelfBook } from './lib/api'
 import { api } from './lib/api'
+import RemoveDialog from './library/RemoveDialog'
 import ShelfView from './library/ShelfView'
 import NotesView from './notes/NotesView'
 import ReaderView from './reader/ReaderView'
 import SearchView from './search/SearchView'
+import SettingsDialog from './settings/SettingsDialog'
 
 type View = 'shelf' | 'search' | 'notes'
 
@@ -24,6 +26,9 @@ export default function App() {
   const [view, setView] = useState<View>('shelf')
   const [notice, setNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [removingBook, setRemovingBook] = useState<ShelfBook | null>(null)
+  const [removeBusy, setRemoveBusy] = useState(false)
 
   const refresh = useCallback(async () => {
     const result = await api.listBooks()
@@ -101,6 +106,25 @@ export default function App() {
     await handleImport(result.data)
   }, [handleImport])
 
+  // 第二实例或「用 Lumen 打开」送来的文件：挂载后取一次队列，之后走事件。
+  useEffect(() => {
+    let disposed = false
+    const unsubscribe = api.onOpenFiles((paths) => {
+      void handleImport(paths)
+    })
+
+    void api.takePendingFiles().then((result) => {
+      if (disposed) return
+      if (result.ok && result.data.length > 0) void handleImport(result.data)
+      else if (!result.ok) setError(result.message)
+    })
+
+    return () => {
+      disposed = true
+      unsubscribe()
+    }
+  }, [handleImport])
+
   const openBook = useCallback(
     async (bookId: string, target: OpenTarget | null) => {
       const book = books.find((item) => item.id === bookId)
@@ -136,29 +160,36 @@ export default function App() {
     [openBook],
   )
 
-  const handleRemove = useCallback(
-    async (book: ShelfBook) => {
-      const confirmed = window.confirm(
-        `把《${book.title}》移出书库？\n\n标注与笔记会保留；重新导入同一个文件即可回到原文。`,
-      )
-      if (!confirmed) return
-
-      const result = await api.removeBook(book.id)
-      if (!result.ok) {
-        setError(result.message)
-        return
-      }
-      setNotice(`已把《${book.title}》移出书库。`)
-      await refresh()
-    },
-    [refresh],
-  )
-
-  const handleOpenUserData = useCallback(async () => {
-    const result = await api.openUserData()
-    if (!result.ok) setError(result.message)
-    else setNotice('已在资源管理器中打开数据目录。')
+  const handleRemove = useCallback((book: ShelfBook) => {
+    setNotice(null)
+    setError(null)
+    setRemovingBook(book)
   }, [])
+
+  const confirmRemove = useCallback(
+    async (purge: boolean) => {
+      const book = removingBook
+      if (!book) return
+      setRemoveBusy(true)
+      try {
+        const result = await api.removeBook(book.id, purge)
+        if (!result.ok) {
+          setError(result.message)
+          return
+        }
+        setRemovingBook(null)
+        setNotice(
+          purge
+            ? `已彻底删除《${book.title}》及其标注。`
+            : `已把《${book.title}》移出书库，标注仍然保留。`,
+        )
+        await refresh()
+      } finally {
+        setRemoveBusy(false)
+      }
+    },
+    [refresh, removingBook],
+  )
 
   const exitReader = useCallback(() => {
     setActiveId(null)
@@ -188,7 +219,7 @@ export default function App() {
           </span>
           <span className="brand-name">Lumen</span>
         </button>
-        <span className="badge">{versions ? `v${versions.app}` : 'v0.0.4'}</span>
+        <span className="badge">{versions ? `v${versions.app}` : 'v…'}</span>
 
         <nav className="topnav" aria-label="主导航">
           {(['shelf', 'search', 'notes'] as View[]).map((item) => (
@@ -208,8 +239,8 @@ export default function App() {
         </nav>
 
         <div className="topbar-spacer" />
-        <button type="button" className="ghost-button" onClick={() => void handleOpenUserData()}>
-          数据目录
+        <button type="button" className="ghost-button" onClick={() => setSettingsOpen(true)}>
+          设置
         </button>
         <button
           type="button"
@@ -250,6 +281,31 @@ export default function App() {
         )}
         <span className="status-version">{versions ? `v${versions.app}` : ''}</span>
       </footer>
+
+      {settingsOpen && (
+        <SettingsDialog
+          versions={versions}
+          onClose={() => setSettingsOpen(false)}
+          onNotice={setNotice}
+          onError={setError}
+          onCleared={() => {
+            setView('shelf')
+            setActiveId(null)
+            void refresh()
+          }}
+        />
+      )}
+
+      {removingBook && (
+        <RemoveDialog
+          book={removingBook}
+          busy={removeBusy}
+          onCancel={() => {
+            if (!removeBusy) setRemovingBook(null)
+          }}
+          onRemove={(purge) => void confirmRemove(purge)}
+        />
+      )}
     </div>
   )
 }

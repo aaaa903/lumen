@@ -1,6 +1,6 @@
 # Lumen 技术设计
 
-版本：0.4（M3 已实现，M4 进行中）
+版本：0.5（M4 已实现，待推送 v0.1.0）
 对应 PRD：0.4
 最后更新：2026-10-21
 
@@ -76,11 +76,13 @@
 ```
 electron/
   main.ts                  应用入口：窗口、协议、单实例、网络拦截
+  window-state.ts          窗口尺寸/位置/最大化的记忆
   preload.ts               contextBridge 白名单
   ipc/
     register.ts            统一注册，错误统一包装
     handle.ts              入参校验与 Result 包装
     books.ts               导入、列表、读取、移除
+    open-files.ts          「用 Lumen 打开」与第二实例的文件转交
     progress.ts            进度读写
     annotations.ts         标注增删改查
     notes.ts               独立笔记
@@ -90,7 +92,7 @@ electron/
   db/
     open.ts                打开数据库、PRAGMA、迁移
     migrations/001_init.sql
-    repositories/          books / progress / annotations / search / tags / notes
+    repositories/          books / progress / annotations / search / tags / notes / settings
   library/
     import.ts              读取文件、算 hash、解析元数据、落盘
     epub-meta.ts           只读 container.xml + OPF 与封面
@@ -107,7 +109,8 @@ shared/
 src/
   main.tsx                 React 挂载
   App.tsx                  路由：书架 / 阅读器 / 搜索 / 笔记
-  library/                 书架、封面占位、导入入口
+  library/                 书架、封面占位、导入入口、移除确认
+  settings/                设置对话框（数据目录、版本、清空数据）
   reader/                  epub.js 生命周期、分页、目录、主题、索引器
   annotations/             选中工具条、高亮渲染、侧栏、批注编辑器、导出预览
   search/                  跨书搜索视图
@@ -127,9 +130,21 @@ scripts/
   cdp-eval.mjs             在渲染层执行表达式（调试用，不提交临时脚本）
   cdp-console.mjs          收集渲染层控制台输出
   cdp-front.mjs            把窗口提到前台并检查 requestAnimationFrame
-  make-icon.mjs            应用图标（M4）
+  make-icon.mjs            应用图标
+  collect-desktop.mjs      把当前版本产物复制到 desktop-dist/
+  release-assets.mjs       计算 SHA-256、写 SHA256SUMS.txt、回填 releases.json
+  release-notes.mjs        由 releases.json 生成 Release 说明
 build/                     打包图标（不进版本库）
-site/                      官网（M4，独立 package）
+site/
+  build.mjs                零依赖静态站生成器（读配置与 releases.json）
+  site.config.json         owner / repo / tagline
+  src/styles.css           站点样式，CSS 变量 + 深浅色
+  src/site.js              仅做校验和复制
+  src/assets/              截图与图标（本地文件）
+  src/data/releases.json   版本、说明、资产大小与 SHA-256（唯一数据源）
+.github/workflows/
+  release.yml              推 v* 标签：构建 → Release → 官网 → Pages
+  site.yml                 只改官网时的 Pages 部署
 ```
 
 ## 5. 数据层
@@ -403,7 +418,7 @@ for each annotation:
 title: 书名
 author: 作者
 exported_at: 2026-10-21T12:00:00.000Z
-lumen_version: 0.0.4
+lumen_version: 0.1.0
 ---
 
 # 书名
@@ -513,33 +528,39 @@ App
 - `electron-builder` 配置在 `package.json` 的 `build` 字段：
   - `files`: `dist/**/*`、`package.json`
   - `win.target`: `nsis` + `zip`，均 x64；`nsis.oneClick: false`、`perMachine: false`、`allowToChangeInstallationDirectory: true`、`createDesktopShortcut: true`
-  - 产物命名：`nsis.artifactName = Lumen-${version}-setup.${ext}`，`zip.artifactName = Lumen-${version}-portable.${ext}`
-  - 中间目录 `../lumen-desktop-build/`（项目同级，避开编辑器和杀毒软件锁定 `.asar`），`npm run collect` 把 `.exe` 与 `.zip` 复制回仓库内 `desktop-dist/`
+  - 产物命名：`nsis.artifactName = Lumen-${version}-setup.${ext}`；`win.artifactName = Lumen-${version}-portable.${ext}`（zip 没有独立配置段，用平台级命名，NSIS 再覆盖）
+  - 中间目录 `../lumen-desktop-build/`（项目同级，避开编辑器和杀毒软件锁定 `.asar`），`npm run collect` 只把**当前版本**的产物复制回仓库内 `desktop-dist/`，并跳过只有几百 KB 的卸载器中间文件
+  - `npm run pack:portable` 只打 zip：本机开启智能应用控制时，electron-builder 需要运行一个临时 exe 来导出卸载器，这一步会被拦截（`spawn UNKNOWN`），安装包交给 CI 生成
 - 原生模块：**没有**。`node:sqlite` 随 Electron 一起分发，升级 Electron 时只需确认 `PRAGMA` 与 FTS5 仍可用（`npm run probe:fts` 会顺带打印 SQLite 版本）。
 - 图标：`scripts/make-icon.mjs` 纯 Node 生成 `build/icon.ico` 与 `icon.png`，不引入图形库；`build/` 不进版本库。
 
 ## 11. 发布流水线
 
 ```
-git tag v* → GitHub Actions（.github/workflows/release.yml）
-  ├─ windows-latest：npm ci → typecheck → test → build → electron-builder --win
-  ├─ 校验 tag 与 package.json version 相等
-  ├─ 计算 SHA256SUMS.txt
-  ├─ softprops/action-gh-release 创建 Release，上传 setup.exe / portable.zip / SHA256SUMS.txt
-  ├─ 用 Release 资产信息生成 site/src/data/releases.json
-  └─ 构建 site/ 并部署到 GitHub Pages（actions/deploy-pages）
+git tag v* → .github/workflows/release.yml（windows-latest）
+  ├─ npm ci → 校验 tag 与 package.json version 相等
+  ├─ typecheck → test → build → electron-builder --win（NSIS + zip）
+  ├─ npm run collect：只收当前版本产物到 desktop-dist/
+  ├─ npm run release:assets：写 SHA256SUMS.txt，回填 releases.json 的 name/size/sha256
+  ├─ npm run release:notes：由同一份 releases.json 生成 Release 说明
+  ├─ softprops/action-gh-release：上传 setup.exe / portable.zip / SHA256SUMS.txt
+  ├─ npm run site:build（CI 环境缺少资产信息会直接失败）
+  └─ upload-pages-artifact → deploy-pages（environment: github-pages）
 ```
 
-- `releases.json` 是官网唯一数据源，字段见 `docs/WEBSITE_PROMPT.md`；首页、下载页、更新日志都从它读版本、大小与校验和。
+- `site/src/data/releases.json` 是官网唯一数据源：首页、下载页、更新日志都从它读版本、大小与校验和；`site/build.mjs` 在 `CI` 环境下发现最新版本缺少 `size` 或 `sha256` 会以非零码退出，避免发布半成品站点。
+- 下载地址不写死在 JSON 里：构建时用 `GITHUB_REPOSITORY`（本地回落到 `site/site.config.json` 的 `owner`/`repo`）拼出 `releases/download/<tag>/<name>`。
+- 只改官网时由 `.github/workflows/site.yml` 在 `main` 分支的 `site/**` 变更上单独构建并部署，不必打标签。
+- 仓库一次性设置：Settings → Pages → Source 选「GitHub Actions」。
 - 开发期里程碑（`0.0.x`）只打 tag，不创建 Release；`0.1.0` 起才发布。
-- Actions 使用 `GITHUB_TOKEN`，不配置任何第三方密钥。
+- Actions 使用 `GITHUB_TOKEN`，不配置任何第三方密钥；`CSC_IDENTITY_AUTO_DISCOVERY=false` 明确不做签名。
 - 发布前必须通过 PRD §9 清单；CI 只保证构建与单测，不跑 E2E。
 
 ## 12. 常量与配置
 
 | 常量 | 值 | 位置 |
 | --- | --- | --- |
-| 应用版本 | `0.0.4`（M3 知识库），版本节奏见 PRD §1.2 | `package.json` |
+| 应用版本 | `0.1.0`（M4 首次公开发布），版本节奏见 PRD §1.2 | `package.json` |
 | 数据库 schema 版本 | `1` | `PRAGMA user_version` |
 | 单文件导入上限 | 200 MB | `electron/library/import.ts` |
 | 内存 EPUB 缓存数量 | 3 | `src/lib/convert/text-epub.ts` |
@@ -559,6 +580,11 @@ git tag v* → GitHub Actions（.github/workflows/release.yml）
 | 批注正文上限 | 20 万字符 | `electron/ipc/annotations.ts` |
 | 迁移备份保留 | 3 份 | `electron/db/open.ts` |
 | localStorage 前缀 | `lumen:` | `src/lib/prefs.ts`、`src/search/SearchView.tsx` |
+| 调试端口 | `LUMEN_DEBUG_PORT`，未设置则不开放 CDP | `electron/main.ts` |
+| 调试数据目录 | `LUMEN_USER_DATA`，覆盖 `userData`，仅用于隔离测试 | `electron/main.ts` |
+| 官网数据源 | `site/src/data/releases.json`（`latest` + `releases[]`） | `site/build.mjs` |
+| 官网页面 | `/`、`/download/`、`/changelog/`、`/privacy/`、`/faq/`、`404.html` | `site/build.mjs` |
+| 官网外部请求 | 0（无字体、无统计、无 CDN） | `site/src` |
 | 允许的请求源 | `lumen:`、`devtools:`、`chrome-extension:`、`chrome-devtools:`、`data:`、`blob:`、`about:`；开发期加渲染服务器与其 WebSocket 源 | `electron/security/network.ts` |
 
 ## 13. 测试策略
@@ -584,4 +610,5 @@ git tag v* → GitHub Actions（.github/workflows/release.yml）
 | `node:sqlite` 处于实验阶段 | API 可能随 Node/Electron 版本变化 | 全部调用收在 `electron/db/`，升级 Electron 时跑 `probe:fts` 与冒烟 |
 | 书内链接 | 脚注可能被翻页热区覆盖 | 扩大热区避让，见阅读器实现 |
 | 代码签名 | 未签名 | 购买证书后设置 `CSC_LINK`，Actions 加签名步骤 |
+| 本机打包 NSIS | 开启智能应用控制时，卸载器导出步骤被拦截（`spawn UNKNOWN`） | `npm run pack:portable` 只打 zip；安装包由 CI 生成 |
 | macOS | 未构建 | V1 视需要 |

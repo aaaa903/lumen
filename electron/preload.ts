@@ -5,13 +5,24 @@ import type { LumenApi } from '../shared/types'
 const api: LumenApi = {
   versions: () => ipcRenderer.invoke('app:versions'),
   openUserData: () => ipcRenderer.invoke('app:openUserData'),
+  openExternal: (url) => ipcRenderer.invoke('app:openExternal', { url }),
+  takePendingFiles: () => ipcRenderer.invoke('app:takePendingFiles'),
+  clearData: () => ipcRenderer.invoke('app:clearData'),
+  onOpenFiles: (callback) => {
+    const listener = (_event: unknown, paths: string[]): void => callback(paths)
+    ipcRenderer.on('app:openFiles', listener)
+    return () => {
+      ipcRenderer.removeListener('app:openFiles', listener)
+    }
+  },
   pickFiles: () => ipcRenderer.invoke('app:pickFiles'),
   importBooks: (paths) => ipcRenderer.invoke('books:import', { paths }),
   listBooks: () => ipcRenderer.invoke('books:list'),
   getBook: (id) => ipcRenderer.invoke('books:get', { id }),
   readBookFile: (id) => ipcRenderer.invoke('books:readFile', { id }),
   readCover: (id) => ipcRenderer.invoke('books:readCover', { id }),
-  removeBook: (id) => ipcRenderer.invoke('books:remove', { id }),
+  removeBook: (id, purge) =>
+    ipcRenderer.invoke('books:remove', { id, purge: purge === true }),
   touchBook: (id) => ipcRenderer.invoke('books:touch', { id }),
   getProgress: (bookId) => ipcRenderer.invoke('progress:get', { bookId }),
   saveProgress: (input) => ipcRenderer.invoke('progress:save', input),

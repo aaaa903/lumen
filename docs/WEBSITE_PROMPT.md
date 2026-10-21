@@ -22,7 +22,7 @@
 
 ## 技术栈
 
-- 静态站点生成：Astro（优先），产物为纯 HTML/CSS/少量内联 JS
+- 静态站点生成：`site/build.mjs`，零依赖、纯 Node 输出 HTML/CSS/少量 JS（不引入 Astro 或其他框架）
 - 样式：手写 CSS，CSS 变量管理配色，复用应用内的四套配色语义
 - 无 UI 框架、无 Tailwind、无字体 CDN、无分析脚本、无 cookie
 - 图标全部内联 SVG 或本地文件
@@ -87,9 +87,10 @@
 
 ## 构建与部署
 
-- `site/` 独立 `package.json`，`npm run build` 输出 `site/dist`
+- `site/` 不引入依赖，`npm run site:build` 输出 `site/dist`
 - GitHub Pages 通过 Actions 部署：`actions/upload-pages-artifact` + `actions/deploy-pages`
-- 仓库名作为 `base`，所有站内链接使用相对路径或 `import.meta.env.BASE_URL`，避免部署到 `https://<owner>.github.io/lumen/` 时资源 404
+- 所有站内链接使用相对路径，避免部署到 `https://<owner>.github.io/lumen/` 时资源 404
+- 仓库 Settings → Pages → Source 选「GitHub Actions」
 - 若以后绑定自定义域名，加 `CNAME` 并在 README 记录
 
 ## 发布流水线衔接

@@ -8,7 +8,7 @@ Lumen：本地优先的阅读、标注与知识库桌面应用（Windows，Elect
 
 无账号、无云端、零网络请求。产品边界见 [PRD.md](./PRD.md)，实现细节见 [TECH_DESIGN.md](./TECH_DESIGN.md)。
 
-当前状态：**M3（0.0.4）已完成**——导入 EPUB / Markdown / TXT、书架、epub.js 分页、目录、进度续读、排版与配色、高亮批注书签、侧栏、重锚、跨书全文搜索、标签、独立笔记、导出 Markdown 均可用；M4 打包与官网正在实现。动手前先看 `docs/IMPLEMENTATION_PROMPT.md` 的里程碑顺序。
+当前状态：**M4（0.1.0）实现完成，待推送 `v0.1.0` 标签**——导入 EPUB / Markdown / TXT、书架、epub.js 分页、目录、进度续读、排版与配色、高亮批注书签、侧栏、重锚、跨书全文搜索、标签、独立笔记、导出 Markdown、打包配置与官网均可用。动手前先看 `docs/IMPLEMENTATION_PROMPT.md` 的里程碑顺序；V1（0.2.0，PDF 等）尚未开始。
 
 ## 命令
 
@@ -19,12 +19,16 @@ npm run typecheck  # tsc --noEmit，提交前必须过
 npm test           # Vitest 单测
 npm run build      # 主进程 / 预加载 / 渲染层三份产物
 npm run pack:dir   # 未压缩目录，本机排查用
+npm run pack:portable  # 只打 portable.zip（智能应用控制会拦截 NSIS 中间步骤）
 npm run pack       # NSIS 安装包 + portable.zip → desktop-dist/
+npm run release:assets # 回填产物大小与 SHA-256 到 site/src/data/releases.json
+npm run release:notes  # 由 releases.json 生成 Release 说明
+npm run site:build # 生成官网到 site/dist/
 npm run db:inspect # 只读打开当前用户数据目录下的 lumen.db，排查数据用
 node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字）
 ```
 
-调试渲染层：先设 `LUMEN_DEBUG_PORT=9223`（PowerShell 用 `$env:LUMEN_DEBUG_PORT='9223'`）再 `npm run dev`，然后通过 CDP 连 `http://127.0.0.1:9223/json/list` 检查页面与数据库状态。仓库内的 `scripts/cdp-eval.mjs` 可执行一小段渲染层表达式：把表达式写进临时文件，运行 `node scripts/cdp-eval.mjs <文件>`；`cdp-console.mjs` 收集控制台输出，`cdp-front.mjs` 截取页面。临时脚本不要提交。
+调试渲染层：先设 `LUMEN_DEBUG_PORT=9223`（PowerShell 用 `$env:LUMEN_DEBUG_PORT='9223'`）再 `npm run dev`，然后通过 CDP 连 `http://127.0.0.1:9223/json/list` 检查页面与数据库状态。需要隔离数据时设 `LUMEN_USER_DATA=<临时目录>`，不要在调试清空、迁移这类操作时动真实书库。仓库内的 `scripts/cdp-eval.mjs` 可执行一小段渲染层表达式：把表达式写进临时文件，运行 `node scripts/cdp-eval.mjs <文件>`；`cdp-console.mjs` 收集控制台输出，`cdp-front.mjs` 截取页面。临时脚本不要提交。
 
 没有 E2E 框架。改动阅读器或标注行为后，按 PRD §9 清单手测关键几条，并在回复里说明测了哪些。桌面端可加 `--remote-debugging-port=9223` 用 CDP 检查渲染层与 IndexedDB / SQLite 状态。
 
@@ -33,11 +37,12 @@ node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字�
 | 文件 | 职责 | 什么时候改 |
 | --- | --- | --- |
 | `electron/main.ts` | 窗口、单实例、`lumen://` 协议、网络拦截接线 | 改桌面行为；不放业务逻辑 |
+| `electron/window-state.ts` | 窗口尺寸、位置、最大化的记忆与写回 | 改窗口行为 |
 | `electron/preload.ts` | `contextBridge` 白名单 | 新增 IPC 通道时必须同步 |
-| `electron/ipc/*.ts` | 通道注册、参数校验、错误包装 | 改接口契约（同时改 `shared/types.ts`） |
+| `electron/ipc/*.ts` | 通道注册、参数校验、错误包装；`open-files.ts` 处理「用 Lumen 打开」与第二实例转交 | 改接口契约（同时改 `shared/types.ts`） |
 | `electron/db/open.ts` | 打开数据库、PRAGMA、迁移执行、备份 | 改 schema 版本或迁移策略 |
 | `electron/db/migrations/*.sql` | 迁移脚本，只增不改 | 加表、加列、加索引 |
-| `electron/db/repositories/*.ts` | 全部 SQL（`books` / `progress` / `annotations` / `search` / `tags` / `notes`） | 改查询；不要把 SQL 写到别处 |
+| `electron/db/repositories/*.ts` | 全部 SQL（`books` / `progress` / `annotations` / `search` / `tags` / `notes` / `settings`） | 改查询；不要把 SQL 写到别处 |
 | `electron/library/import.ts` | 导入编排：一次性读取、SHA-256、去重、写文件、元数据、封面 | 改导入流程 |
 | `electron/library/paths.ts` | 相对 userData 的路径解析与越界防护 | 改文件落点 |
 | `shared/text-book.ts` | TXT / Markdown 解码、章节切分、元数据 | 改文本格式支持（必须加单测） |
@@ -50,12 +55,17 @@ node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字�
 | `shared/export.ts` | 标注 → Markdown 的纯函数 | 改导出格式 |
 | `src/reader/*` | epub.js 生命周期、分页、目录、主题、进度、索引器 | 改阅读体验 |
 | `src/annotations/*` | 选中工具条、高亮渲染、侧栏、批注编辑器 | 改标注交互 |
-| `src/library/*` | 书架网格、导入入口、移除 | 改书架呈现 |
+| `src/library/*` | 书架网格、导入入口、移除确认 | 改书架呈现 |
+| `src/settings/SettingsDialog.tsx` | 数据目录、版本信息、清空数据 | 改设置项（不要新增一级入口） |
 | `src/search/*`、`src/notes/*` | 搜索、笔记与标签视图 | 改知识库 |
 | `src/lib/api.ts` | 类型化 IPC 客户端，唯一调用 `window.lumen` 的地方 | 新增通道 |
 | `shared/export.ts` | 标注导出 Markdown（纯函数） | 改导出格式 |
 | `src/styles.css` | 全部样式，含配色变量 | 任何视觉调整 |
-| `site/` | 官网（Astro），独立 `package.json` | 改官网 |
+| `scripts/release-assets.mjs` | 计算产物 SHA-256、写 `SHA256SUMS.txt`、回填 `releases.json` | 改发布流程或产物命名 |
+| `scripts/release-notes.mjs` | 由 `releases.json` 生成 Release 说明 | 改发布文案 |
+| `scripts/collect-desktop.mjs` | 只复制当前版本产物到 `desktop-dist/` | 改产物目录或命名 |
+| `site/` | 官网：`build.mjs` 零依赖生成静态页，`src/` 放样式、脚本与截图，`src/data/releases.json` 是唯一数据源 | 改官网；不要引入框架或外部资源 |
+| `.github/workflows/` | `release.yml`（打标签发布）、`site.yml`（只改官网时部署） | 改 CI |
 | `docs/` | 实施提示词与官网提示词 | 改交付方式 |
 
 约定：组件不直接调 `window.lumen`；`node:sqlite` 不出现在 `src/`；`epub.js` 只出现在 `src/reader/`；书内 XHTML 拼接只出现在 `src/lib/convert/`。
@@ -70,6 +80,7 @@ node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字�
 6. **渲染层不碰 Node**，不 `require`、不读文件、不发网络请求。所有 IO 走 IPC。
 7. **所有 SQL 参数化**，不拼字符串；搜索的 `MATCH` 参数必须走 `shared/search-query.ts` 的转义函数。
 8. **时间统一 Unix 毫秒整数**，id 统一 `crypto.randomUUID()`。
+9. **官网零外部依赖**：不引入框架、字体 CDN、统计脚本；下载链接只能指向 GitHub Release 资产。版本、大小、校验和只从 `site/src/data/releases.json` 读，不在页面里手写。
 
 ## 数据层规则
 
@@ -117,7 +128,8 @@ node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字�
 - [ ] 若改了标注定位：跑一次「外部改写文件后重锚」场景
 - [ ] 若改了搜索：测两字中文、英文单词、含引号查询、空结果
 - [ ] 若改了数据模型：旧库可迁移，或写清楚不兼容与迁移方式
-- [ ] 若改了桌面壳：`npm run pack` 成功，安装版与 portable.zip 都能启动并读到同一份数据
+- [ ] 若改了桌面壳：`npm run pack` 成功（本机开智能应用控制时改用 `pack:portable`，安装包看 CI），安装版与 portable.zip 都能启动并读到同一份数据
+- [ ] 若改了官网：`npm run site:build` 成功，断网打开无外部请求，下载链接与校验和指向最新版本
 - [ ] 若完成一个里程碑：改 `package.json` 的 `version`、更新 PRD §10 状态、打 `v<version>` 标签
 - [ ] 若改了行为：同步更新 PRD / TECH_DESIGN 对应章节
 - [ ] 回复里说明改了什么、怎么验证、有哪些已知取舍
@@ -134,6 +146,9 @@ node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字�
 | 打包后白屏 | 检查 `lumen://` 协议的路径解析与 `dist/renderer` 是否存在 |
 | 窗口缩小时正文被裁 | 检查 `rendition.resize` 是否传了显式尺寸、`ResizeObserver` 是否还在 |
 | 打包报 `EPERM/EBUSY: rename/unlink` | 输出目录或 `.asar` 被编辑器/杀毒/索引服务占用：关闭正在运行的应用；中间产物放在项目同级 `../lumen-desktop-build/` |
+| 打包报 `spawn UNKNOWN`（NSIS 阶段） | 本机智能应用控制拦截了 electron-builder 用于导出卸载器的临时 exe：改用 `npm run pack:portable`，正式安装包交给 CI |
+| 官网下载按钮 404 | `site/site.config.json` 的 `owner` 是否填对；CI 用 `GITHUB_REPOSITORY` 覆盖。Release 资产名必须与 `releases.json` 一致 |
+| 官网构建报「资产信息不完整」 | `releases.json` 缺少 `size` / `sha256`：先跑 `npm run release:assets`，或等发布工作流回填 |
 | Smart App Control 拦截 `setup.exe` | 未签名；改用 `Lumen-<version>-portable.zip`。不要为此关闭 Smart App Control |
 | 网络日志出现外部请求 | 立即定位来源，补进白名单以外的拦截测试；不允许以「只是开发期」为由放行 |
 
@@ -145,7 +160,7 @@ node scripts/make-sample-library.mjs   # 生成 5 本测试书（含 50 万字�
 - 不要为了做 PDF 而提前抽象「通用文档模型」；V1 再说。
 - 不要在渲染层加载 `node:sqlite`，也不要开 `nodeIntegration`、关 `contextIsolation`。
 - 不要把业务逻辑塞进 `electron/main.ts`。
-- 不要把 `dist/`、`desktop-dist/`、`../lumen-desktop-build/`、`build/icon.*`、`node_modules/`、`public/sample*.epub` 提交进版本库。
+- 不要把 `dist/`、`desktop-dist/`、`site/dist/`、`release-notes.md`、`../lumen-desktop-build/`、`build/icon.*`、`node_modules/`、`public/sample-library/` 提交进版本库。
 - 不要在没有单测的情况下改 `shared/locator.ts` 或搜索转义逻辑。
 
 ## 文档同步规则

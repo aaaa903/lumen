@@ -4,7 +4,7 @@
 
 没有账号，没有云端，没有任何网络请求。书、标注、笔记都存在你自己的机器上。
 
-> 状态：v0.0.4（M3 知识库）。本仓库是重写版，逐步取代旧仓库 v0.2 的纯阅读器；在功能对齐之前，旧版本仍是可用的正式版。
+> 状态：v0.1.0（M4 首次公开发布）。MVP 完整：导入、阅读、标注、知识库、打包与官网都已就绪；安装包与官网部署由推送 `v0.1.0` 标签后的 CI 完成。
 
 ## 版本号
 
@@ -15,11 +15,11 @@
 | M0 骨架 | `0.0.1` |
 | M1 导入与阅读 | `0.0.2` |
 | M2 标注 | `0.0.3` |
-| M3 知识库（当前） | `0.0.4` |
-| 首次公开发布 | `0.1.0` |
+| M3 知识库 | `0.0.4` |
+| 首次公开发布（当前） | `0.1.0` |
 | V1（PDF 等） | `0.2.0` |
 
-每个里程碑结束都要改 `version`、打 `v<version>` 标签，并同步 `PRD.md` §10 的状态。开发期里程碑不建 Release。
+每个里程碑结束都要改 `version`、打 `v<version>` 标签，并同步 `PRD.md` §10 的状态。开发期里程碑只打标签，`0.1.0` 起才创建 Release。
 
 ## 文档
 
@@ -65,6 +65,8 @@ npm run typecheck    # tsc --noEmit
 npm run build        # 主进程、预加载、渲染层三份产物
 npm test             # Vitest
 npm run db:inspect   # 打开当前用户数据目录下的 lumen.db（只读）
+npm run site:build   # 生成官网到 site/dist/
+npm run pack:portable # 只打 portable.zip（本机开智能应用控制时用）
 ```
 
 项目不包含原生模块：数据库用的是 Electron 自带的 `node:sqlite`，因此不需要 `node-gyp`、Visual Studio Build Tools，升级 Electron 也不会出现 ABI 失配。
@@ -85,13 +87,24 @@ node node_modules/electron/install.js
 ## 打包与发布
 
 ```bash
-npm run pack:dir     # 未压缩目录，用于本机排查
-npm run pack         # NSIS 安装包 + portable.zip，输出到 desktop-dist/
+npm run pack:dir      # 未压缩目录，用于本机排查
+npm run pack:portable # 只生成 portable.zip，输出到 desktop-dist/
+npm run pack          # NSIS 安装包 + portable.zip，输出到 desktop-dist/
+npm run release:assets # 把产物大小与 SHA-256 回填 site/src/data/releases.json
+npm run release:notes  # 用同一份数据生成 Release 说明
 ```
 
-产物命名固定为 `Lumen-<version>-setup.exe` 与 `Lumen-<version>-portable.zip`，两者与 `SHA256SUMS.txt` 一起上传到 GitHub Releases。推送 `v*` 标签会触发 GitHub Actions 自动构建并发布；官网（GitHub Pages）读取同一份 `releases.json` 渲染下载页。
+产物命名固定为 `Lumen-<version>-setup.exe` 与 `Lumen-<version>-portable.zip`，两者与 `SHA256SUMS.txt` 一起上传到 GitHub Releases。推送 `v*` 标签会触发 `.github/workflows/release.yml` 自动构建、创建 Release、回填 `releases.json` 并部署官网；只改官网时走 `.github/workflows/site.yml`。
 
 安装包不做代码签名，Windows SmartScreen 会提示未知发布者；若系统开启了智能应用控制（Smart App Control），`setup.exe` 与单文件免安装版可能被直接拦截，此时使用 `Lumen-<version>-portable.zip`。彻底消除提示需要代码签名证书。
+
+本机若开启了智能应用控制，electron-builder 在生成安装包时会尝试运行一个中间 exe 来导出卸载器，这一步会被拦截，表现为 `spawn UNKNOWN`。此时用 `npm run pack:portable` 只打免安装包；正式安装包交给 GitHub Actions 的 Windows runner 生成。
+
+## 官网
+
+`site/` 是零依赖静态站，由 `site/build.mjs` 读 `site/site.config.json` 与 `site/src/data/releases.json` 直接生成 HTML/CSS。没有前端框架、没有外部字体、没有统计脚本，下载按钮直接指向 GitHub Release 资产。
+
+部署到 GitHub Pages 需要一次性设置：仓库 Settings → Pages → Source 选「GitHub Actions」。`site/site.config.json` 的 `owner` 填 GitHub 用户名；CI 会用 `GITHUB_REPOSITORY` 覆盖，本地预览也可以直接改这一项。
 
 ## 数据位置
 

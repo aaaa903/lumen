@@ -1,0 +1,96 @@
+name: Release
+
+# 推送 v* 标签时：构建 Windows 产物 → 创建 Release → 用真实资产信息生成官网 → 部署 GitHub Pages。
+# 任一步失败都会中断，避免发布半成品。
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+jobs:
+  build:
+    name: 构建与发布
+    runs-on: windows-latest
+    steps:
+      - name: 检出
+        uses: actions/checkout@v4
+
+      - name: Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 校验标签与版本号一致
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ("v$version" -ne $env:GITHUB_REF_NAME) {
+            throw "标签 $env:GITHUB_REF_NAME 与 package.json 的 $version 不一致，先改版本号再打标签。"
+          }
+          Write-Host "版本 $version"
+
+      - name: 类型检查
+        run: npm run typecheck
+
+      - name: 单元测试
+        run: npm test
+
+      - name: 打包
+        run: npm run pack
+
+      - name: 回填资产信息
+        run: npm run release:assets
+
+      - name: 生成 Release 说明
+        run: npm run release:notes
+
+      - name: 创建 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Lumen ${{ github.ref_name }}
+          body_path: release-notes.md
+          files: |
+            desktop-dist/Lumen-*-setup.exe
+            desktop-dist/Lumen-*-portable.zip
+            desktop-dist/SHA256SUMS.txt
+          fail_on_unmatched_files: true
+
+      - name: 构建官网
+        run: npm run site:build
+
+      - name: 配置 Pages
+        uses: actions/configure-pages@v5
+
+      - name: 上传站点产物
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/dist
+
+  deploy:
+    name: 部署官网
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: 部署到 GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

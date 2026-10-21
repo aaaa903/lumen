@@ -1,14 +1,22 @@
-import { app, BrowserWindow, protocol } from 'electron'
+import { app, BrowserWindow, protocol, shell } from 'electron'
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { extname, join, resolve, sep } from 'node:path'
-import { openDatabase } from './db/open'
+import { openDatabase, type Db } from './db/open'
 import { registerIpc } from './ipc/register'
+import { collectFileArgs, enqueueOpenFiles } from './ipc/open-files'
 import { installNetworkGuard } from './security/network'
+import { readWindowState, trackWindowState } from './window-state'
 
 // 开发期与打包后都必须落到同一个用户数据目录，否则书和标注会「换个启动方式就丢」。
+// LUMEN_USER_DATA 只用于隔离测试：指向临时目录即可在不碰真实书库的情况下验证清空、迁移等操作。
 app.setName('Lumen')
-app.setPath('userData', join(app.getPath('appData'), 'Lumen'))
+app.setPath(
+  'userData',
+  process.env['LUMEN_USER_DATA']
+    ? resolve(process.env['LUMEN_USER_DATA'])
+    : join(app.getPath('appData'), 'Lumen'),
+)
 
 const RENDERER_DIR = join(__dirname, '..', 'renderer')
 const PRELOAD_PATH = join(__dirname, '..', 'preload', 'index.js')
@@ -57,11 +65,15 @@ protocol.registerSchemesAsPrivileged([
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, argv) => {
+    enqueueOpenFiles(collectFileArgs(argv))
     if (!mainWindow) return
     if (mainWindow.isMinimized()) mainWindow.restore()
     mainWindow.focus()
   })
+
+  // 首次启动也可能带文件参数（例如「用 Lumen 打开」或命令行拖入）。
+  enqueueOpenFiles(collectFileArgs(process.argv))
 
   app.whenReady().then(start).catch(handleFatal)
 }
@@ -71,18 +83,24 @@ function start(): void {
 
   registerLumenProtocol()
   installNetworkGuard({ devUrl: DEV_URL })
-  registerIpc(db)
-  createWindow()
+  registerIpc(db, (paths) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    mainWindow.webContents.send('app:openFiles', paths)
+  })
+  createWindow(db)
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (BrowserWindow.getAllWindows().length === 0) createWindow(db)
   })
 }
 
-function createWindow(): void {
+function createWindow(db: Db): void {
+  const state = readWindowState(db)
   mainWindow = new BrowserWindow({
-    width: 1180,
-    height: 800,
+    width: state.width,
+    height: state.height,
+    x: state.x,
+    y: state.y,
     minWidth: 880,
     minHeight: 600,
     show: false,
@@ -101,16 +119,23 @@ function createWindow(): void {
     },
   })
 
+  if (state.maximized) mainWindow.maximize()
+  trackWindowState(db, mainWindow)
   mainWindow.once('ready-to-show', () => mainWindow?.show())
 
   mainWindow.on('closed', () => {
     mainWindow = null
   })
 
-  // 外链只交给系统浏览器，应用内不允许导航到任何其他源。
-  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  // 外链只交给系统浏览器，应用内不允许打开第二个窗口或导航到其他源。
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    openExternalIfHttps(url)
+    return { action: 'deny' }
+  })
   mainWindow.webContents.on('will-navigate', (event, url) => {
-    if (!isAllowedNavigation(url)) event.preventDefault()
+    if (isAllowedNavigation(url)) return
+    event.preventDefault()
+    openExternalIfHttps(url)
   })
 
   if (DEV_URL) {
@@ -183,6 +208,16 @@ function isAllowedNavigation(url: string): boolean {
     return new URL(url).origin === new URL(DEV_URL).origin
   } catch {
     return false
+  }
+}
+
+/** 只把 https 链接交给系统浏览器；http、file、javascript 等一律忽略。 */
+function openExternalIfHttps(url: string): void {
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol === 'https:') void shell.openExternal(parsed.toString())
+  } catch {
+    // 解析失败说明不是合法链接，直接丢弃。
   }
 }
 

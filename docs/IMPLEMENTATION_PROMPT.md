@@ -97,9 +97,10 @@ Lumen 是一个 Windows 桌面应用：本地优先的阅读、标注与知识�
 
 - `electron-builder` 配置，产物命名 `Lumen-<version>-setup.exe` / `Lumen-<version>-portable.zip`
 - `scripts/make-icon.mjs`、`build/` 资源
-- GitHub Actions：tag 触发构建、上传 Release、生成 `SHA256SUMS.txt`
+- GitHub Actions：tag 触发构建、上传 Release、生成 `SHA256SUMS.txt`、回填 `releases.json`、部署 GitHub Pages
+- `scripts/release-assets.mjs`、`scripts/release-notes.mjs`、`.github/workflows/release.yml` / `site.yml`
 - 官网（另见 `docs/WEBSITE_PROMPT.md`）
-- README 补齐安装、数据位置、Smart App Control 说明
+- README 补齐安装、数据位置、Smart App Control 与官网部署说明
 
 验收：PRD §8 场景 9 通过；`npm run pack` 在干净机器上能装、能卸、卸载保留数据。
 
