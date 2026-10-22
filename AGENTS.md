@@ -77,7 +77,7 @@ node scripts/copy-pdfjs-assets.mjs     # 单独补 public/pdfjs/（predev / preb
 | `scripts/copy-pdfjs-assets.mjs` | 把 pdf.js 的 cMap 与标准字体复制到 `public/pdfjs/` | 升级 `pdfjs-dist` 后确认资源仍在 |
 | `site/` | 官网：`build.mjs` 零依赖生成静态页，`src/` 放样式、脚本与截图，`src/data/releases.json` 是唯一数据源 | 改官网；不要引入框架或外部资源 |
 | `.github/workflows/` | `release.yml`（打标签发布）、`site.yml`（只改官网时部署） | 改 CI |
-| `docs/` | 实施提示词与官网提示词 | 改交付方式 |
+| `docs/` | 实施提示词、官网提示词与用户文档 `USER_GUIDE.md` | 改交付方式或用户说明 |
 
 约定：组件不直接调 `window.lumen`；`node:sqlite` 不出现在 `src/`；`epub.js` 只在 `src/reader/`；`pdfjs-dist` 只在 `PdfViewer.tsx`；书内 XHTML 拼接只出现在 `src/lib/convert/`。
 

@@ -128,7 +128,7 @@ export default function ShelfView({
           <p className="empty-kicker">书架</p>
           <h1>书架还是空的</h1>
           <p className="empty-body">
-            把 EPUB、Markdown 或 TXT 拖进这个窗口，或点下面的按钮选择文件。书只保存在本机，
+            把 EPUB、PDF、Markdown 或 TXT 拖进这个窗口，或点下面的按钮选择文件。书只保存在本机，
             不会上传，也不会有任何网络请求。
           </p>
           <button type="button" className="primary-btn" onClick={onPick}>
