@@ -127,6 +127,8 @@ export type UpdateAnnotationInput = {
 
 export type ImportResult =
   | { status: 'ok'; book: ShelfBook }
+  /** 同一文件以前被移出书库：恢复原记录，标注、进度与笔记自动接回。 */
+  | { status: 'restored'; book: ShelfBook }
   | { status: 'duplicate'; bookId: string; title: string }
   | { status: 'error'; fileName: string; code: IpcErrorCode; message: string }
 
@@ -274,6 +276,10 @@ export type LumenApi = {
   pickFiles: () => Promise<IpcResult<string[]>>
   importBooks: (paths: string[]) => Promise<IpcResult<ImportResult[]>>
   listBooks: () => Promise<IpcResult<ShelfBook[]>>
+  /** 「已移除」分组：只列软删的书，供恢复或彻底删除。 */
+  listRemovedBooks: () => Promise<IpcResult<ShelfBook[]>>
+  /** 把移出的书放回书架；标注、进度与笔记保持原样。 */
+  restoreBook: (id: string) => Promise<IpcResult<ShelfBook>>
   getBook: (id: string) => Promise<IpcResult<ShelfBook>>
   readBookFile: (id: string) => Promise<IpcResult<ArrayBuffer>>
   readCover: (id: string) => Promise<IpcResult<{ mime: string; data: ArrayBuffer } | null>>

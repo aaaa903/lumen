@@ -6,7 +6,7 @@ import type { Book, BookFormat, ImportResult } from '../../shared/types'
 import { decodeTextBytes, parseTextSource } from '../../shared/text-book'
 import type { Db } from '../db/open'
 import { withTransaction } from '../db/open'
-import { findByHash, insertBook } from '../db/repositories/books'
+import { findByHash, findRemovedByHash, insertBook, restoreBook } from '../db/repositories/books'
 import { readEpubMetadata } from './epub-meta'
 import { ImportError } from './errors'
 
@@ -85,6 +85,16 @@ export async function importBook(db: Db, sourcePath: string): Promise<ImportResu
     const existing = findByHash(db, sha256)
     if (existing) {
       return { status: 'duplicate', bookId: existing.id, title: existing.title }
+    }
+
+    // 同一个文件以前被移出书库：恢复原记录，标注、进度与笔记随之接回。
+    const removed = findRemovedByHash(db, sha256)
+    if (removed) {
+      const restored = restoreBook(db, removed.id)
+      if (restored) return { status: 'restored', book: restored }
+      // 并发导入抢先恢复时按重复处理。
+      const now = findByHash(db, sha256)
+      if (now) return { status: 'duplicate', bookId: now.id, title: now.title }
     }
 
     const fallbackTitle = basename(sourcePath, extname(sourcePath)).trim() || '未命名'

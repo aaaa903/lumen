@@ -103,6 +103,7 @@ node scripts/copy-pdfjs-assets.mjs     # 单独补 public/pdfjs/（predev / preb
 - `db.exec()` 只用于迁移脚本与 `PRAGMA`；带参数的语句一律 `prepare().run/get/all`。
 - FTS 的 `MATCH` 参数只允许由 `shared/search-query.ts` 生成，禁止在调用点拼字符串。
 - 删书分两种：`books:remove({ purge: false })` 只写 `deleted_at`，标注与笔记保留；`purge: true` 才级联删除并删源文件。
+- 移出的书可恢复：`books:restore` 清空 `deleted_at`；`books.sha256` 的唯一约束仍被软删行占用，所以 `findByHash` 只查未移出的行，重新导入同一文件时走 `findRemovedByHash` + `restoreBook`，不要新建行。
 - 书籍原文件不存进数据库，只存相对路径；读写路径不要整本读进内存（除 epub.js 需要的 Blob）。
 - 进度写入必须防抖（400 ms）并 `flush` 后再退出阅读器，否则最后一次翻页丢失。
 - 新增 `localStorage` key 用 `lumen:` 前缀，并在 TECH_DESIGN §12 登记（V1 新增 `lumen:reader-flow`）。

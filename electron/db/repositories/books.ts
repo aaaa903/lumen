@@ -56,8 +56,22 @@ const SELECT_SHELF = `
   LEFT JOIN progress p ON p.book_id = b.id
 `
 
+/**
+ * 去重只针对书架上的书。移出书库的记录还占着同一个 sha256（表上有 UNIQUE 约束），
+ * 重新导入时必须走 restoreBook 恢复，不能新建。
+ */
 export function findByHash(db: Db, sha256: string): Book | null {
-  const row = db.prepare('SELECT * FROM books WHERE sha256 = ?').get(sha256) as BookRow | undefined
+  const row = db
+    .prepare('SELECT * FROM books WHERE sha256 = ? AND deleted_at IS NULL')
+    .get(sha256) as BookRow | undefined
+  return row ? toBook(row) : null
+}
+
+/** 同一个文件是否被移出过书库；导入时用它决定恢复哪一本。 */
+export function findRemovedByHash(db: Db, sha256: string): Book | null {
+  const row = db
+    .prepare('SELECT * FROM books WHERE sha256 = ? AND deleted_at IS NOT NULL')
+    .get(sha256) as BookRow | undefined
   return row ? toBook(row) : null
 }
 
@@ -96,6 +110,18 @@ export function listShelf(db: Db): ShelfBook[] {
   return rows.map(toShelfBook)
 }
 
+/** 书架底部「已移除」分组：最近移出的排在前面。 */
+export function listRemoved(db: Db): ShelfBook[] {
+  const rows = db
+    .prepare(
+      `${SELECT_SHELF}
+       WHERE b.deleted_at IS NOT NULL
+       ORDER BY b.deleted_at DESC`,
+    )
+    .all() as ShelfRow[]
+  return rows.map(toShelfBook)
+}
+
 export function getShelfBook(db: Db, id: string): ShelfBook | null {
   const row = db.prepare(`${SELECT_SHELF} WHERE b.id = ?`).get(id) as ShelfRow | undefined
   return row ? toShelfBook(row) : null
@@ -115,6 +141,15 @@ export function removeBook(db: Db, id: string, purge: boolean, at: number): bool
     db.prepare('UPDATE books SET deleted_at = ? WHERE id = ?').run(at, id)
   }
   return true
+}
+
+/** 恢复移出的书：只清 deleted_at，标注、进度与笔记原样接回。 */
+export function restoreBook(db: Db, id: string): ShelfBook | null {
+  const result = db
+    .prepare('UPDATE books SET deleted_at = NULL WHERE id = ? AND deleted_at IS NOT NULL')
+    .run(id)
+  if (Number(result.changes) === 0) return null
+  return getShelfBook(db, id)
 }
 
 export function countBooks(db: Db): number {

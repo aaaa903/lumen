@@ -28,13 +28,21 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [removedBooks, setRemovedBooks] = useState<ShelfBook[]>([])
   const [removingBook, setRemovingBook] = useState<ShelfBook | null>(null)
+  const [purgeOnly, setPurgeOnly] = useState(false)
   const [removeBusy, setRemoveBusy] = useState(false)
+  const [restoringId, setRestoringId] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
-    const result = await api.listBooks()
-    if (result.ok) setBooks(result.data)
-    else setError(result.message)
+    const active = await api.listBooks()
+    if (active.ok) setBooks(active.data)
+    else setError(active.message)
+
+    const removed = await api.listRemovedBooks()
+    if (removed.ok) setRemovedBooks(removed.data)
+    else setError(removed.message)
+
     setLoading(false)
   }, [])
 
@@ -81,6 +89,7 @@ export default function App() {
         }
 
         const added = result.data.filter((item) => item.status === 'ok').length
+        const restored = result.data.filter((item) => item.status === 'restored').length
         const duplicated = result.data.filter((item) => item.status === 'duplicate').length
         const failures = result.data.filter(
           (item): item is Extract<ImportResult, { status: 'error' }> => item.status === 'error',
@@ -88,6 +97,7 @@ export default function App() {
 
         const parts: string[] = []
         if (added > 0) parts.push(`导入 ${added} 本`)
+        if (restored > 0) parts.push(`恢复 ${restored} 本`)
         if (duplicated > 0) parts.push(`${duplicated} 本已在书库`)
         if (failures.length > 0) parts.push(`${failures.length} 本失败`)
         setNotice(parts.length > 0 ? `${parts.join('，')}。` : '没有可导入的文件。')
@@ -171,8 +181,39 @@ export default function App() {
   const handleRemove = useCallback((book: ShelfBook) => {
     setNotice(null)
     setError(null)
+    setPurgeOnly(false)
     setRemovingBook(book)
   }, [])
+
+  /** 「已移除」分组里的彻底删除：不提供保留标注的选项。 */
+  const handlePurgeRemoved = useCallback((book: ShelfBook) => {
+    setNotice(null)
+    setError(null)
+    setPurgeOnly(true)
+    setRemovingBook(book)
+  }, [])
+
+  const handleRestore = useCallback(
+    async (book: ShelfBook) => {
+      setNotice(null)
+      setError(null)
+      setRestoringId(book.id)
+      try {
+        const result = await api.restoreBook(book.id)
+        if (!result.ok) {
+          setError(result.message)
+          return
+        }
+        setNotice(`已把《${book.title}》恢复到书架，标注与进度都在。`)
+        await refresh()
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : '恢复没有完成，请重试。')
+      } finally {
+        setRestoringId(null)
+      }
+    },
+    [refresh],
+  )
 
   const confirmRemove = useCallback(
     async (purge: boolean) => {
@@ -189,7 +230,7 @@ export default function App() {
         setNotice(
           purge
             ? `已彻底删除《${book.title}》及其标注。`
-            : `已把《${book.title}》移出书库，标注仍然保留。`,
+            : `已把《${book.title}》移出书库，标注仍然保留，可在书架底部「已移除」里恢复。`,
         )
         await refresh()
       } finally {
@@ -260,12 +301,16 @@ export default function App() {
       {view === 'shelf' && (
         <ShelfView
           books={books}
+          removed={removedBooks}
           loading={loading}
           importing={importing}
+          restoringId={restoringId}
           onImport={(paths) => void handleImport(paths)}
           onPick={() => void handlePick()}
           onOpen={handleOpen}
           onRemove={(book) => void handleRemove(book)}
+          onRestore={(book) => void handleRestore(book)}
+          onPurge={(book) => void handlePurgeRemoved(book)}
         />
       )}
       {view === 'search' && <SearchView onOpen={handleSearchOpen} />}
@@ -305,6 +350,7 @@ export default function App() {
         <RemoveDialog
           book={removingBook}
           busy={removeBusy}
+          purgeOnly={purgeOnly}
           onCancel={() => {
             if (!removeBusy) setRemovingBook(null)
           }}

@@ -286,6 +286,7 @@ CREATE TABLE settings (
 - 所有 id 为 `crypto.randomUUID()`。
 - 软删统一用 `deleted_at`，读路径默认过滤；只有「彻底删除」才 `DELETE`。
 - 书被软删时，`annotations` 与 `notes` 不动；书被彻底删除时级联清理。
+- `books.sha256` 有 `UNIQUE` 约束，软删的行仍占着这个哈希。因此导入去重只查 `deleted_at IS NULL`；同一文件命中软删记录时恢复原行（清空 `deleted_at`），不新建，否则要么违反唯一约束，要么让标注与进度失去归属。
 - `settings` 只存主进程需要读的项（如窗口状态、数据目录版本）；界面偏好留在 `localStorage`。
 
 ### 5.3 迁移
@@ -302,7 +303,7 @@ CREATE TABLE settings (
 
 - 原文件：`userData/books/<bookId>.<ext>`。M1 的实现是一次性 `readFile` 到内存，同一份字节用于算 SHA-256、解析元数据与写盘；单文件上限 200 MB，避免读两遍。超过 200 MB 直接拒绝。
 - 封面：`userData/covers/<bookId>.<原扩展名>`，M1 保存 EPUB 内原始图片字节，不做缩略图；书架按封面原始尺寸显示。缩放到 480 px 放到 M4 打包前评估。
-- 删除书籍文件只在「彻底删除」时执行；默认移除只写 `deleted_at`，文件保留，重新导入时按 SHA-256 找回标注。
+- 删除书籍文件只在「彻底删除」时执行；默认移除只写 `deleted_at`，文件保留。恢复有两条路：书架底部「已移除」分组直接清空 `deleted_at`，或重新导入同一文件时按 SHA-256 命中并恢复原行，标注、进度与笔记都接回。
 
 ## 6. 关键流程
 
@@ -313,7 +314,9 @@ CREATE TABLE settings (
   ├─ stat：空文件、非文件、超过 200 MB 直接拒绝
   ├─ 按扩展名判断格式，不支持的返回 UNSUPPORTED
   ├─ 一次性 readFile，计算 SHA-256
-  ├─ 查 books.sha256；命中则返回 { status: 'duplicate', bookId }
+  ├─ 查 books.sha256（只查未移出的行）；命中则返回 { status: 'duplicate', bookId }
+  ├─ 查同一哈希的软删记录；命中则清空 deleted_at、返回 { status: 'restored', book }
+  │    └─ 标注、进度、笔记与上次打开位置原样接回；已有索引的不重新排队
   ├─ 按扩展名解析元数据
   │    ├─ epub：读 META-INF/container.xml → OPF → title/creator/cover
   │    ├─ pdf：先用文件名；标题、作者、页数等首次打开后由 pdf.js 回填
@@ -324,7 +327,7 @@ CREATE TABLE settings (
   └─ 返回 { status: 'ok', book }
 ```
 
-整批导入逐个返回，渲染层汇总「导入 N 本 / M 本已在书库 / K 本失败」。一本坏书不影响其他本。
+整批导入逐个返回，渲染层汇总「导入 N 本 / 恢复 M 本 / K 本已在书库 / J 本失败」。一本坏书不影响其他本。
 
 限制：单文件 ≤ 200 MB，超过直接拒绝并说明；EPUB 必须含 `META-INF/container.xml` 与可解析 OPF，加密 EPUB 返回 `ENCRYPTED`。PDF 只在导入时按扩展名识别，真正能否打开由首次阅读时的 pdf.js 判断并给出错误；加密 PDF 提示「有密码，暂不支持打开」。
 
@@ -566,6 +569,8 @@ type Result<T> = Ok<T> | Err
 | `app:saveText` | `{ suggestedName, content }` | `{ path } \| null`（取消时 null） |
 | `books:import` | `{ paths: string[] }` | `ImportResult[]` |
 | `books:list` | — | `ShelfBook[]` |
+| `books:listRemoved` | — | `ShelfBook[]`（只列软删的书，按移出时间倒序） |
+| `books:restore` | `{ id }` | `ShelfBook`（清空 `deleted_at`；未索引的书重新排队） |
 | `books:get` | `{ id }` | `ShelfBook` |
 | `books:readFile` | `{ id }` | `ArrayBuffer` |
 | `books:readCover` | `{ id }` | `{ mime, data: ArrayBuffer } \| null` |

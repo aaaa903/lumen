@@ -3,7 +3,15 @@ import { extname } from 'node:path'
 import { dialog } from 'electron'
 import type { ImportResult, ShelfBook } from '../../shared/types'
 import type { Db } from '../db/open'
-import { getShelfBook, listShelf, removeBook, touchBook, updatePdfMeta } from '../db/repositories/books'
+import {
+  getShelfBook,
+  listRemoved,
+  listShelf,
+  removeBook,
+  restoreBook,
+  touchBook,
+  updatePdfMeta,
+} from '../db/repositories/books'
 import type { Indexer } from '../indexer'
 import { importBook } from '../library/import'
 import { resolveUserDataPath } from '../library/paths'
@@ -41,15 +49,27 @@ export function registerBookIpc(db: Db, indexer: Indexer): void {
     for (const path of paths) {
       const result = await importBook(db, path)
       results.push(result)
-      // 导入完就排队建索引，用户不必先打开一次才能搜到。
-      if (result.status === 'ok' && result.book.format !== 'pdf') {
-        indexer.enqueue(result.book.id)
+      // 导入或恢复后排队建索引，用户不必先打开一次才能搜到；已有索引的不重复排队。
+      const imported =
+        result.status === 'ok' || result.status === 'restored' ? result.book : null
+      if (imported && imported.format !== 'pdf' && imported.indexedAt === null) {
+        indexer.enqueue(imported.id)
       }
     }
     return ok(results)
   })
 
   handle<ShelfBook[]>('books:list', () => ok(listShelf(db)))
+
+  handle<ShelfBook[]>('books:listRemoved', () => ok(listRemoved(db)))
+
+  handle<ShelfBook>('books:restore', (payload) => {
+    const id = readString(readObject(payload)['id'], 'id')
+    const book = restoreBook(db, id)
+    if (!book) throw new IpcError('NOT_FOUND', '这本书不在「已移除」里，刷新后再试。')
+    if (book.format !== 'pdf' && book.indexedAt === null) indexer.enqueue(book.id)
+    return ok(book)
+  })
 
   handle<ShelfBook>('books:get', (payload) => {
     const id = readString(readObject(payload)['id'], 'id')

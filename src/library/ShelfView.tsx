@@ -14,22 +14,31 @@ const FORMAT_LABEL: Record<ShelfBook['format'], string> = {
 
 type ShelfViewProps = {
   books: ShelfBook[]
+  /** 已移出书库、标注仍在的书；用于底部分组。 */
+  removed: ShelfBook[]
   loading: boolean
   importing: boolean
+  restoringId: string | null
   onImport: (paths: string[]) => void
   onPick: () => void
   onOpen: (book: ShelfBook) => void
   onRemove: (book: ShelfBook) => void
+  onRestore: (book: ShelfBook) => void
+  onPurge: (book: ShelfBook) => void
 }
 
 export default function ShelfView({
   books,
+  removed,
   loading,
   importing,
+  restoringId,
   onImport,
   onPick,
   onOpen,
   onRemove,
+  onRestore,
+  onPurge,
 }: ShelfViewProps) {
   const [filter, setFilter] = useState(readShelfFilter)
   const [dragging, setDragging] = useState(false)
@@ -53,6 +62,44 @@ export default function ShelfView({
       .map((file) => api.pathForFile(file))
       .filter((path) => path.length > 0)
   }
+
+  const removedSection = removed.length > 0 && (
+    <section className="shelf-removed">
+      <details>
+        <summary>
+          已移除 <span className="shelf-removed-count">{removed.length}</span>
+        </summary>
+        <p className="shelf-removed-hint">
+          这些书的标注、笔记与进度都还在。点「恢复到书架」回到原来的位置，或重新导入同一个文件。
+        </p>
+        <ul className="removed-list">
+          {removed.map((book) => (
+            <li className="removed-item" key={book.id}>
+              <span className="removed-title">{book.title}</span>
+              <span className="removed-meta">
+                {FORMAT_LABEL[book.format]}
+                {book.author ? ` · ${book.author}` : ''} · 移出于{' '}
+                {relativeTime(book.deletedAt ?? book.addedAt)}
+              </span>
+              <span className="removed-actions">
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={() => onRestore(book)}
+                  disabled={restoringId === book.id}
+                >
+                  {restoringId === book.id ? '恢复中…' : '恢复到书架'}
+                </button>
+                <button type="button" className="removed-purge" onClick={() => onPurge(book)}>
+                  彻底删除
+                </button>
+              </span>
+            </li>
+          ))}
+        </ul>
+      </details>
+    </section>
+  )
 
   if (loading) {
     return (
@@ -91,6 +138,7 @@ export default function ShelfView({
             想先试读：运行 <code>npm run samples</code> 生成几本测试书，再导入它们。
           </p>
         </section>
+        {removedSection}
       </main>
     )
   }
@@ -171,6 +219,8 @@ export default function ShelfView({
           ))}
         </div>
       )}
+
+      {removedSection}
 
       {dragging && <div className="drop-hint">松手即可导入</div>}
     </main>
