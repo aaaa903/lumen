@@ -1,7 +1,7 @@
 # Lumen 技术设计
 
-版本：0.11（V1.2 已发布：v0.4.0 增加移出后的恢复与「已移除」分组）
-对应 PRD：0.11
+版本：0.12（V1 功能完成：v0.4.0 为 V1 最终版本，进入维护）
+对应 PRD：0.12
 最后更新：2026-10-22
 
 本文描述**现状与下一步**。代码与本文冲突时，以代码为准并立即修正本文，不留「待更新」。
@@ -692,14 +692,14 @@ git tag v* → .github/workflows/release.yml（windows-latest）
 - 只改官网时由 `.github/workflows/site.yml` 在 `main` 分支的 `site/**` 变更上单独构建并部署，不必打标签。
 - 仓库一次性设置：Settings → Pages → Source 选「GitHub Actions」。
 - 开发期里程碑（`0.0.x`）只打 tag，不创建 Release；`0.1.0` 起才发布。
-- Actions 使用 `GITHUB_TOKEN`，不配置任何第三方密钥；`CSC_IDENTITY_AUTO_DISCOVERY=false` 明确不做签名。
+- Actions 使用 `GITHUB_TOKEN`，未配置任何签名凭据。`CSC_IDENTITY_AUTO_DISCOVERY=false` 阻止 electron-builder 自动探测本机证书，避免 CI 在找不到证书时打包失败。接入签名（优先 SignPath Foundation，见 PRD §3.5）时应删掉这一行，改为先把产物上传到签名服务、下载签名后的文件再继续打包。
 - 发布前必须通过 PRD §9 清单；CI 只保证构建与单测，不跑 E2E。
 
 ## 12. 常量与配置
 
 | 常量 | 值 | 位置 |
 | --- | --- | --- |
-| 应用版本 | `0.4.0`（V1.2 已发布），版本节奏见 PRD §1.2 | `package.json` |
+| 应用版本 | `0.4.0`（V1 最终版本），版本节奏见 PRD §1.2 | `package.json` |
 | 数据库 schema 版本 | `3` | `PRAGMA user_version` |
 | 单文件导入上限 | 200 MB | `electron/library/import.ts` |
 | 内存 EPUB 缓存数量 | 3 | `src/lib/convert/text-epub.ts` |
@@ -768,6 +768,6 @@ git tag v* → .github/workflows/release.yml（windows-latest）
 | `node:sqlite` 处于实验阶段 | API 可能随 Node/Electron 版本变化 | 全部调用收在 `electron/db/`，升级 Electron 时跑 `probe:fts` 与冒烟 |
 | 滚动模式的内部容器 | 通过 `rendition.manager.container` 访问 epub.js 内部对象 | epub.js 升级时若改名，退回键盘翻页并记录 |
 | 书内链接 | 脚注可能被翻页热区覆盖 | 扩大热区避让，见阅读器实现 |
-| 代码签名 | 未签名 | 购买证书后设置 `CSC_LINK`，Actions 加签名步骤 |
+| 代码签名 | 未签名：SmartScreen 提示未知发布者，智能应用控制可能拦截 `setup.exe` | 优先申请 SignPath Foundation 的免费开源签名，其次购买 OV 证书并设置 `CSC_LINK`；见 PRD §3.5 |
 | 本机打包 NSIS | 开启智能应用控制时，卸载器导出步骤被拦截（`spawn UNKNOWN`） | `npm run pack:portable` 只打 zip；安装包由 CI 生成 |
-| macOS | 未构建 | V1 视需要 |
+| macOS | 未构建 | 见 PRD §3.5，没有排期 |

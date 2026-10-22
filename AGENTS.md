@@ -8,7 +8,7 @@ Lumen：本地优先的阅读、标注与知识库桌面应用（Windows，Elect
 
 无账号、无云端、零网络请求。产品边界见 [PRD.md](./PRD.md)，实现细节见 [TECH_DESIGN.md](./TECH_DESIGN.md)。
 
-当前状态：**V1.2 已发布（`0.4.0`，2026-10-22）**——在 V1.1 的基础上增加移出书库后的恢复：书架底部「已移除」分组可一键恢复，重新导入同一文件也会接回原记录与标注。仓库 https://github.com/aaaa903/lumen ，Release v0.4.0 提供 setup 与 portable，官网 https://aaaa903.github.io/lumen/ 已同步。推送 `v*` 标签即走完整发布流水线。下一步（macOS 构建、PDF 全文检索）尚未开始。
+当前状态：**V1 功能完成，进入维护（`0.4.0`，2026-10-22）**——V1.2 在 V1.1 的基础上增加移出书库后的恢复：书架底部「已移除」分组可一键恢复，重新导入同一文件也会接回原记录与标注。`0.4.0` 是 V1 的最终版本，之后只修缺陷、不加功能。仓库 https://github.com/aaaa903/lumen ，Release v0.4.0 提供 setup 与 portable，官网 https://aaaa903.github.io/lumen/ 已同步。推送 `v*` 标签即走完整发布流水线。未排期的后续事项（代码签名、笔记关联标注、Obsidian 目录导出、macOS 构建、PDF 全文检索）见 PRD §3.5。
 
 ## 命令
 
