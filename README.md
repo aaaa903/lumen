@@ -4,7 +4,7 @@
 
 没有账号，没有云端，没有任何网络请求。书、标注、笔记都存在你自己的机器上。
 
-> 状态：v0.3.0 待发布（V1.1，2026-10-22），增加书内搜索与标注引用；最新已发布版本为 v0.2.0。官网 <https://aaaa903.github.io/lumen/>，安装包与免安装包见 [Release v0.2.0](https://github.com/aaaa903/lumen/releases/tag/v0.2.0)。
+> 状态：v0.3.0（V1.1，2026-10-22），增加书内搜索与标注引用。官网 <https://aaaa903.github.io/lumen/>，安装包与免安装包见 [Release v0.3.0](https://github.com/aaaa903/lumen/releases/tag/v0.3.0)。
 
 ## 版本号
 

@@ -8,7 +8,7 @@ Lumen：本地优先的阅读、标注与知识库桌面应用（Windows，Elect
 
 无账号、无云端、零网络请求。产品边界见 [PRD.md](./PRD.md)，实现细节见 [TECH_DESIGN.md](./TECH_DESIGN.md)。
 
-当前状态：**V1.1 待发布（`0.3.0`，2026-10-22）**——在 V1 的基础上增加书内搜索（`Ctrl+F`）、批注之间的引用与反向引用、段落级检索索引。仓库 https://github.com/aaaa903/lumen ，最新公开版本仍是 v0.2.0，官网 https://aaaa903.github.io/lumen/ 。推送 `v*` 标签即走完整发布流水线。下一步（macOS 构建、PDF 全文检索）尚未开始。
+当前状态：**V1.1 已发布（`0.3.0`，2026-10-22）**——在 V1 的基础上增加书内搜索（`Ctrl+F`）、批注之间的引用与反向引用、段落级检索索引。仓库 https://github.com/aaaa903/lumen ，Release v0.3.0 提供 setup 与 portable，官网 https://aaaa903.github.io/lumen/ 已同步。推送 `v*` 标签即走完整发布流水线。下一步（macOS 构建、PDF 全文检索）尚未开始。
 
 ## 命令
 
@@ -201,6 +201,7 @@ node scripts/copy-pdfjs-assets.mjs     # 单独补 public/pdfjs/（predev / preb
 | Pages 部署报 `Tag "v..." is not allowed to deploy to github-pages` | 仓库 Settings → Environments → github-pages 的部署分支策略只允许了 `main`：加一条 `v*`（tag）策略，或调 API `deployment-branch-policies` |
 | 发布流水线回写资产被拒（`fetch first`） | tag 构建默认是浅克隆，本地缺少远端 `main` 的提交：`actions/checkout` 必须设 `fetch-depth: 0`；若仍有并发推送，先 `git fetch origin main` 再推 |
 | 官网校验和与下载到的文件不一致 | `site/src/data/releases.json` 是本地构建的值：等发布工作流把 CI 构建的哈希回写到 `main`（提交信息 `chore: 回填 v* 资产信息`），再部署官网 |
+| 发布时 `main` 上出现一次失败的 Site 运行（`资产信息不完整`） | 先推 `main` 再推 tag 时，`site/**` 的版本条目还没有 `size` / `sha256`，这次 Site 必然失败；回填提交由 `GITHUB_TOKEN` 推送，不会再触发 Site。站点本身由 Release 流水线的部署作业在回填之后重建，属预期现象，不要为了消红点手改 |
 | Smart App Control 拦截 `setup.exe` | 未签名；改用 `Lumen-<version>-portable.zip`。不要为此关闭 Smart App Control |
 | 网络日志出现外部请求 | 立即定位来源，补进白名单以外的拦截测试；不允许以「只是开发期」为由放行 |
 

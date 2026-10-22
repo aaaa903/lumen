@@ -1,7 +1,7 @@
 # Lumen 技术设计
 
-版本：0.9（V1.1 待发布：v0.3.0 增加书内搜索、标注引用与段落级索引）
-对应 PRD：0.9
+版本：0.10（V1.1 已发布：v0.3.0 增加书内搜索、标注引用与段落级索引）
+对应 PRD：0.10
 最后更新：2026-10-22
 
 本文描述**现状与下一步**。代码与本文冲突时，以代码为准并立即修正本文，不留「待更新」。
@@ -694,7 +694,7 @@ git tag v* → .github/workflows/release.yml（windows-latest）
 
 | 常量 | 值 | 位置 |
 | --- | --- | --- |
-| 应用版本 | `0.3.0`（V1.1 待发布），版本节奏见 PRD §1.2 | `package.json` |
+| 应用版本 | `0.3.0`（V1.1 已发布），版本节奏见 PRD §1.2 | `package.json` |
 | 数据库 schema 版本 | `3` | `PRAGMA user_version` |
 | 单文件导入上限 | 200 MB | `electron/library/import.ts` |
 | 内存 EPUB 缓存数量 | 3 | `src/lib/convert/text-epub.ts` |
