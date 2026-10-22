@@ -5,6 +5,7 @@ import {
   contextScore,
   findBestQuote,
   findQuoteCandidates,
+  findQuoteWithin,
   jaccard,
   normalizeText,
   parseLocator,
@@ -122,5 +123,27 @@ describe('parseLocator', () => {
     expect(parseLocator({ format: 'epub', cfi: 'x' })).toBeNull()
     expect(parseLocator({ format: 'mobi', href: 'a.xhtml' })).toBeNull()
     expect(parseLocator(null)).toBeNull()
+  })
+})
+
+describe('findQuoteWithin', () => {
+  const text = '开头一段。命中词出现在这里，后面还有。另一处无效。'
+
+  it('只在给定区间里找，并返回原文下标', () => {
+    const hit = findQuoteWithin(text, 0, text.indexOf('后面'), '命中词')
+    expect(hit).not.toBeNull()
+    expect(text.slice(hit!.start, hit!.end)).toBe('命中词')
+  })
+
+  it('区间里没有原文时返回 null', () => {
+    expect(findQuoteWithin(text, 0, 4, '命中词')).toBeNull()
+    expect(findQuoteWithin(text, 0, text.length, '')).toBeNull()
+  })
+
+  it('忽略空白差异', () => {
+    const spaced = '第一行\n\n  关键词 出现在这里'
+    const hit = findQuoteWithin(spaced, 0, spaced.length, '关键词 出现')
+    expect(hit).not.toBeNull()
+    expect(spaced.slice(hit!.start, hit!.end)).toBe('关键词 出现')
   })
 })

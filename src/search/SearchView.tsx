@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { OpenTarget, SearchHit, SearchScope, Tag } from '../../shared/types'
-import { makeSnippet } from '../../shared/search-query'
+import { makeSnippet, snippetQuote } from '../../shared/search-query'
+import { stripReferences } from '../../shared/references'
 import { api } from '../lib/api'
 import { relativeTime } from '../lib/format'
+import Snippet from './Snippet'
 
 type SearchViewProps = {
   onOpen: (target: OpenTarget) => void
@@ -34,19 +36,9 @@ function snippetFor(hit: SearchHit, query: string): { text: string; start: numbe
   if (hit.kind === 'text') {
     return { text: hit.snippet, start: hit.matchStart, length: hit.matchLength }
   }
-  const snippet = makeSnippet(hit.quote || hit.noteMd, query)
+  // 批注里的引用标记对读者没有意义，摘要里换成短标签再截片段。
+  const snippet = makeSnippet(stripReferences(hit.quote || hit.noteMd), query)
   return { text: snippet.text, start: snippet.matchStart, length: snippet.matchLength }
-}
-
-function Snippet({ text, start, length }: { text: string; start: number; length: number }) {
-  if (length <= 0) return <span>{text}</span>
-  return (
-    <span>
-      {text.slice(0, start)}
-      <mark>{text.slice(start, start + length)}</mark>
-      {text.slice(start + length)}
-    </span>
-  )
 }
 
 /** 跨书检索：正文走 FTS 索引，标注直接查库；结果按书分组，点击跳回原文。 */
@@ -154,7 +146,9 @@ export default function SearchView({ onOpen }: SearchViewProps) {
         href: hit.href,
         chapterIndex: hit.chapterIndex,
         chapterTitle: hit.chapterTitle,
-        quote: hit.kind === 'text' ? matched : hit.quote || hit.noteMd.slice(0, 80),
+        // 带前后文的片段更容易贴准位置；命中的几个字单独标出。
+        quote: hit.kind === 'text' ? snippetQuote(hit.snippet) : hit.quote || hit.noteMd.slice(0, 80),
+        match: hit.kind === 'text' ? matched : undefined,
       })
     },
     [onOpen],
@@ -277,7 +271,7 @@ export default function SearchView({ onOpen }: SearchViewProps) {
                         </span>
                         {hit.kind === 'annotation' && hit.noteMd.trim() && (
                           <span className="result-note">
-                            {hit.noteMd.trim().slice(0, 120)}
+                            {stripReferences(hit.noteMd).trim().slice(0, 120)}
                           </span>
                         )}
                         {hit.kind === 'annotation' && (

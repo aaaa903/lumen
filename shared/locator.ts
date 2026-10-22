@@ -144,6 +144,31 @@ export function findQuoteCandidates(
   return candidates.sort((left, right) => right.score - left.score || left.start - right.start)
 }
 
+/**
+ * 在已知区间里找 quote，返回原文下标。
+ * 书内搜索先定位到命中片段所在的区间，再用它把范围缩到命中的那几个字。
+ */
+export function findQuoteWithin(
+  text: string,
+  start: number,
+  end: number,
+  quote: string,
+): QuoteCandidate | null {
+  const normalizedQuote = normalizeText(quote)
+  if (!normalizedQuote) return null
+
+  const safeStart = Math.max(0, Math.min(start, text.length))
+  const safeEnd = Math.max(safeStart, Math.min(end, text.length))
+  const slice = text.slice(safeStart, safeEnd)
+  const { text: haystack, indexMap } = normalizeWithMap(slice)
+  const position = haystack.indexOf(normalizedQuote)
+  if (position < 0) return null
+
+  const offsetStart = safeStart + indexMap[position]
+  const offsetEnd = safeStart + indexMap[position + normalizedQuote.length - 1] + 1
+  return { start: offsetStart, end: offsetEnd, score: 1 }
+}
+
 /** 取相似度最高的候选；没有候选或低于阈值时返回 null。 */
 export function findBestQuote(
   text: string,

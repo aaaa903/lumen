@@ -1,7 +1,7 @@
 # Lumen 技术设计
 
-版本：0.8（V1 已发布：v0.2.0 增加 PDF、导入即索引、滚动模式与库导出）
-对应 PRD：0.8
+版本：0.9（V1.1 待发布：v0.3.0 增加书内搜索、标注引用与段落级索引）
+对应 PRD：0.9
 最后更新：2026-10-22
 
 本文描述**现状与下一步**。代码与本文冲突时，以代码为准并立即修正本文，不留「待更新」。
@@ -99,6 +99,7 @@ electron/
     open.ts                打开数据库、PRAGMA、迁移、外键校验
     migrations/001_init.sql
     migrations/002_pdf.sql books.format 增加 pdf、books.page_count
+    migrations/003_search_chunks.sql 清空旧索引，等待按段落重建
     repositories/          books / progress / annotations / search / tags / notes / settings
   library/
     import.ts              读取文件、算 hash、解析元数据、落盘
@@ -112,6 +113,7 @@ shared/
   text-book.ts             TXT / Markdown 解码、章节切分
   locator.ts               标注定位与重锚
   search-query.ts          检索语句构造、片段截取
+  references.ts            批注引用的解析、标签替换与展示文案
   export.ts                标注 → Markdown（纯函数）
 src/
   main.tsx                 React 挂载；`?worker=index` 时挂载索引窗口
@@ -120,15 +122,18 @@ src/
   settings/                设置对话框（数据目录、版本、清空数据、库导出）
   reader/                  epub.js 生命周期、分页/滚动、目录、主题、索引器
     PdfViewer.tsx          pdf.js 渲染、页码进度、PDF 标注与目录
+    ReaderSearch.tsx       书内搜索面板：检索当前书、跳转命中
     IndexWorker.tsx        隐藏窗口里的索引循环
     indexer.ts             逐章取正文、分批提交
     toc.ts                 目录归一化与 spine 兜底
   annotations/             选中工具条、高亮渲染、侧栏、批注编辑器、导出预览
   search/                  跨书搜索视图
+  search/Snippet.tsx       检索片段：标出命中词
   notes/                   独立笔记与标签管理
   lib/
     api.ts                 类型化 IPC 客户端
     format.ts              体积、百分比、相对时间
+    note-markdown.ts       批注 Markdown 渲染，含引用链接
     prefs.ts               localStorage 偏好（含 `lumen:reader-flow`）
     convert/               Markdown / TXT → 内存 EPUB
   global.d.ts              window.lumen 类型声明
@@ -168,9 +173,9 @@ site/
 - 打开时设置：`journal_mode = WAL`、`synchronous = NORMAL`、`foreign_keys = ON`、`busy_timeout = 5000`、`temp_store = MEMORY`
 - 版本号放在 `PRAGMA user_version`，与 `migrations/` 下的序号一致。
 
-### 5.2 Schema（`001_init.sql` + `002_pdf.sql`）
+### 5.2 Schema（`001_init.sql` + `002_pdf.sql` + `003_search_chunks.sql`）
 
-`001_init.sql` 建全部核心表；`002_pdf.sql` 重建 `books`，把 `format` 的枚举扩到 `pdf` 并加 `page_count`。下面是迁移后的现状：
+`001_init.sql` 建全部核心表；`002_pdf.sql` 重建 `books`，把 `format` 的枚举扩到 `pdf` 并加 `page_count`；`003_search_chunks.sql` 不改表结构，清空旧索引并把非 PDF 书的 `indexed_at` 置空，让后台按段落级规则重建。下面是迁移后的现状：
 
 ```sql
 CREATE TABLE books (
@@ -291,6 +296,7 @@ CREATE TABLE settings (
 - `PRAGMA user_version` 从 1 起；数据库里 `user_version = 0` 视为新库。
 - 需要重建表的迁移（当前只有 `002_pdf`）在事务外临时 `PRAGMA foreign_keys = OFF`，否则 `DROP TABLE books` 会按 `ON DELETE CASCADE` 清空 `progress`、`annotations`、`search_chunks`。迁移结束立即恢复外键，并跑 `PRAGMA foreign_key_check`；有违例就抛错停止启动，不带病写数据。
 - `002_pdf` 先把旧表数据复制到 `books_new`（`page_count` 填 0），再删旧表、改名。子表的外键仍指向表名 `books`，重建后无需改动。
+- `003_search_chunks` 是纯数据迁移：`DELETE FROM search_chunks` 后把非 PDF 书的 `indexed_at` 置空。旧库里的一块是一整章，书内搜索只能报每章第一处；清空后由启动扫描重新排队，按段落重建。书、标注、进度与笔记都不动。
 
 ### 5.4 文件存储
 
@@ -434,7 +440,7 @@ for each annotation (最多前 200 条):
        └─ 需要时创建隐藏窗口 lumen://app/index.html?worker=index
             └─ IndexWorker 循环 indexer:next → 领任务（带 180 s 租约）
                  ├─ books:get → 非 PDF → loadBookAsEpub → new ePub
-                 ├─ 逐章 spine.get(i).load() → body.textContent
+                 ├─ 逐章 spine.get(i).load() → chunkParagraphs(body) 按块级元素切段
                  └─ search:indexBegin → 分批 search:indexChunks → search:indexFinish
             └─ indexer:complete(bookId, ok) → 主进程通知所有界面窗口刷新书架
 ```
@@ -443,7 +449,9 @@ for each annotation (最多前 200 条):
 - 租约：领到任务 180 s 内没有完成报告（窗口崩溃、页面冻结、热更新丢回调）就收回重排，避免书架永远「未索引」。
 - 归还：索引窗口卸载（React StrictMode 双跑、HMR）前调用 `indexer:release`，任务原样回队且不计重试次数。
 - 空闲：队列为空 20 s 后关闭隐藏窗口；主窗口关闭时立即销毁，避免进程多留。
-- 批量：累计 30 万字符提交一次；单章超过 50 万字符截断；单次 IPC 最多 500 块 / 500 万字符。
+- 批量：累计 30 万字符提交一次；单次 IPC 最多 500 块 / 500 万字符。
+- 切块：按 `p` / `h1`–`h6` / `li` / `blockquote` / `pre` / `dd` / `dt` / `td` / `th` / `figcaption` / `div` 等块级元素切段，行内标签不拆开；单块超过 2000 字再等分。一块对应一条 `search_chunks`，因此同一章的多处命中能分别列出。
+- 迁移：`003_search_chunks` 清空旧的一章一块索引，启动扫描按新规则重建；重建期间书内搜索只覆盖已写入的部分，界面会提示。
 - 提交：`search:indexBegin` 清空旧块并把 `indexed_at` 置空 → 多次 `search:indexChunks`（单事务写入）→ `search:indexFinish` 写时间戳。FTS 由触发器同步。
 - 章节标题取 TOC 中与 href 对应的标题，取不到时用 `第 N 节`。
 - 中途失败或被取消时不写 `indexed_at`，任务失败后重试；PDF 导入时直接写 `indexed_at`，不进入队列。
@@ -453,10 +461,11 @@ for each annotation (最多前 200 条):
 
 | 输入 | 语句 |
 | --- | --- |
-| 长度 ≥ 3 | `SELECT ... FROM search_fts JOIN search_chunks ON chunks.id = search_fts.rowid WHERE search_fts MATCH ? ORDER BY bm25(search_fts) LIMIT ?` |
+| 长度 ≥ 3 | `SELECT ... FROM search_fts JOIN search_chunks ON chunks.id = search_fts.rowid WHERE search_fts MATCH ? AND b.deleted_at IS NULL ORDER BY bm25(search_fts) LIMIT ?` |
 | 长度 < 3（中文常见） | `... WHERE chunks.text LIKE ? ESCAPE '\\' ... LIMIT ?`，参数已是 `%词%` |
+| 限定一本书（书内搜索） | 同上，额外加 `AND chunks.book_id = ?`；排序改为 `chapter_index ASC, id ASC`，按阅读顺序排列，不再按相关度 |
 
-`MATCH` 的参数只由 `shared/search-query.ts` 生成：查询串内的 `"` 写成两个 `""`，整体包成 `"..."`，避免 FTS 语法注入；LIKE 的 `\`、`%`、`_` 逐个转义。命中片段在渲染层用 `makeSnippet` 截取并高亮，不使用 SQL 的 `snippet()`。
+`MATCH` 的参数只由 `shared/search-query.ts` 生成：查询串内的 `"` 写成两个 `""`，整体包成 `"..."`，避免 FTS 语法注入；LIKE 的 `\`、`%`、`_` 逐个转义。命中片段在渲染层用 `makeSnippet` 截取并高亮，不使用 SQL 的 `snippet()`。`search:query` 的 `bookId` 可空：为空表示整库，非空时只查这本书，供书内搜索使用；整库结果带 `snippet / matchStart / matchLength`，跳转时同时用片段与命中词定位。
 
 标注检索走普通 SQL（`locator` JSON 与 `note_md` 的 `LIKE`），标签过滤是 `annotation_tags` 的 `EXISTS` 子查询；结果按 `updated_at` 倒序。
 
@@ -468,6 +477,8 @@ for each annotation (最多前 200 条):
 
 排序按 `chapterIndex`，同章按 CFI；跨段落同组标注各自成段。空标注也生成带 front matter 的文件，明确写「这本书还没有标注」。
 
+批注里的引用 `[[ann:<id>]]` 在导出时替换成「章节 + 原文片段」（默认截 40 字）。解析用的标注池默认是本次导出的条目；只导出勾选的几条时，调用方必须把整本书的标注作为 `referencePool` 传进来，否则勾选范围外的目标会被误判成已删除。目标确实不存在时写「引用的标注已不存在」，导出文件不因此中断。
+
 库导出（`export:library`）：不经过预览。用户选一个目录，主进程在其中新建 `Lumen-标注-YYYYMMDD-HHmm/`，遍历未删除的书，跳过没有标注的，按书名生成 `<书名>.md`；文件名非法字符替换为 `_`，同名追加 ` (2)`。任何一次写盘失败都整体报 `IO_ERROR` 并提示换目录，不静默跳过。
 
 ```markdown
@@ -475,7 +486,7 @@ for each annotation (最多前 200 条):
 title: 书名
 author: 作者
 exported_at: 2026-10-21T12:00:00.000Z
-lumen_version: 0.2.0
+lumen_version: 0.3.0
 ---
 
 # 书名
@@ -509,6 +520,33 @@ PdfViewer 挂载
 - 选中只允许在同一页内：跨页选择直接提示「请分两次选」。`quote` 取 `range.toString()` 归一化后的文本，`prefix` / `suffix` 从该页文字层取 32 字。
 - 书签记当前页码；侧栏点击标注会滚到对应页。
 - 进度 400 ms 防抖写入，退出前 flush；`books.page_count` 与标题作者一起回填，书架不再显示「未命名」。
+
+### 6.10 书内搜索
+
+```
+阅读器顶栏「搜索」/ Ctrl+F → ReaderSearch 面板
+  ├─ 输入 ≥ 2 字 → 260 ms 防抖 → search:query({ q, scope: 'text', bookId, limit: 80 })
+  ├─ 结果按 chapter_index 排 → 片段用 <mark> 标出命中词
+  └─ 点击
+       ├─ locateQuote：spine.get(href) 取章节 → 加载 DOM → findBestQuote(全文, 片段)
+       ├─ findQuoteWithin：在片段区间里再找命中词，避免重复词贴到第一处
+       ├─ cfiFromOffsets → rendition.display(cfi)；失败退回章节开头
+       └─ annotations.highlight(cfi, ...) 临时标黄，6 秒后 remove
+```
+
+- 只对 EPUB / Markdown / TXT 开放；PDF 不参与全文索引，按钮不显示。
+- `indexedAt` 为空时仍可搜，但面板提示「还在后台建索引，只能搜到已写入的部分」。
+- 关闭面板不改变阅读位置；`Esc` 先关面板，再退出阅读器。输入框内不触发翻页键。
+
+### 6.11 标注引用（双向链接）
+
+批注正文里用 `[[ann:<annotation-id>]]` 表示引用，不新增数据库字段，也不建引用表。
+
+- 写入：`NoteEditor` 的「引用标注」列出本书其它标注，可按原文、章节、批注筛选；选中后在光标处插入标记。
+- 展示：`src/lib/note-markdown.ts` 给 `markdown-it` 加一条行内规则，把标记渲染成带 `data-annotation-id` 的站内链接；标签文字是「章节 + 原文片段」。外链与图片仍在 `DOMPurify` 白名单外。
+- 反向引用：`ReaderView` 扫描本书全部 `noteMd`，得到「目标 id → 引用它的批注」，侧栏显示「引用 N / 被引 N」，编辑器列出引用者；点击跳转前先把当前草稿落库，避免切换丢失。
+- 删除目标：不级联删除引用；展示改为「引用的标注已不存在」，导出同样写这句话。
+- 导出：见 §6.8，引用换成可读标签。
 
 ## 7. IPC 契约
 
@@ -548,7 +586,7 @@ type Result<T> = Ok<T> | Err
 | `indexer:next` | — | `IndexerJob \| null`（隐藏窗口领取任务） |
 | `indexer:release` | `{ bookId }` | `null`（归还任务，不计重试） |
 | `indexer:complete` | `{ bookId, ok }` | `null`（主进程广播 `indexer:indexed`） |
-| `search:query` | `{ q, scope: 'text' \| 'annotations', tagId?, limit? }` | `SearchHit[]` |
+| `search:query` | `{ q, scope: 'text' \| 'annotations', tagId?, bookId?, limit? }` | `SearchHit[]` |
 | `tags:list` | — | `Tag[]` |
 | `tags:create` | `{ name }` | `Tag` |
 | `tags:rename` | `{ id, name }` | `Tag` |
@@ -578,13 +616,14 @@ App
 │  ├─ 顶栏            返回、书名、目录、标注、书签、排版设置
 │  ├─ EpubCanvas      epub.js 挂载点 + 点击翻页层（分页 / 滚动）
 │  ├─ TocDrawer       目录（递归展平、当前章高亮）
+│  ├─ ReaderSearch    书内搜索（Ctrl+F，检索当前书并跳转）
 │  ├─ AnnotationRail  侧栏：按章节分组的全部标注、多选、导出
 │  ├─ SelectionMenu   选中浮动工具条（四色高亮、批注、复制）
 │  ├─ NoteEditor      Markdown 文本域 + 预览、标签、删除
 │  └─ ExportDialog    导出预览、复制、保存
 ├─ PdfViewer（PDF）   缩放、懒渲染、页码进度、目录、同一套标注侧栏
 ├─ IndexWorker        隐藏窗口专用：循环领任务、建索引后回报
-├─ SearchView         跨书搜索（正文 / 标注、标签过滤）
+├─ SearchView         跨书搜索（正文 / 标注、标签过滤），片段由 Snippet 标出命中词
 └─ NotesView          独立笔记与标签管理
 ```
 
@@ -655,8 +694,8 @@ git tag v* → .github/workflows/release.yml（windows-latest）
 
 | 常量 | 值 | 位置 |
 | --- | --- | --- |
-| 应用版本 | `0.2.0`（V1 发布），版本节奏见 PRD §1.2 | `package.json` |
-| 数据库 schema 版本 | `2` | `PRAGMA user_version` |
+| 应用版本 | `0.3.0`（V1.1 待发布），版本节奏见 PRD §1.2 | `package.json` |
+| 数据库 schema 版本 | `3` | `PRAGMA user_version` |
 | 单文件导入上限 | 200 MB | `electron/library/import.ts` |
 | 内存 EPUB 缓存数量 | 3 | `src/lib/convert/text-epub.ts` |
 | 进度写入防抖 | 400 ms | `src/reader/ReaderView.tsx` |
@@ -671,7 +710,12 @@ git tag v* → .github/workflows/release.yml（windows-latest）
 | 索引任务租约 | 180 s | `electron/indexer.ts` |
 | 索引窗口空闲关闭 | 20 s | `electron/indexer.ts` |
 | 索引窗口轮询 | 空闲 1.2 s，出错 2 s | `src/reader/IndexWorker.tsx` |
-| 索引批量 | 每批 30 万字符；单章截断 50 万字符 | `src/reader/indexer.ts` |
+| 索引批量 | 每批 30 万字符；单块上限 2000 字 | `src/reader/indexer.ts` |
+| 书内搜索条数 / 最短查询 | 80 条 / 2 字 | `src/reader/ReaderSearch.tsx` |
+| 书内搜索防抖 | 260 ms | `src/reader/ReaderSearch.tsx` |
+| 搜索命中临时高亮 | 6 s | `src/reader/ReaderView.tsx` |
+| 引用选择器条数上限 | 8 条 | `src/annotations/NoteEditor.tsx` |
+| 引用标签原文长度 | 侧栏 30 字，导出 40 字 | `shared/references.ts`、`shared/export.ts` |
 | PDF 缩放范围 | 0.6–2.2，步长 0.15 | `src/reader/PdfViewer.tsx` |
 | PDF 标注校验上限 | 200 条 | `src/reader/PdfViewer.tsx` |
 | PDF 进度防抖 | 400 ms | `src/reader/PdfViewer.tsx` |
@@ -694,11 +738,12 @@ git tag v* → .github/workflows/release.yml（windows-latest）
 
 | 对象 | 方式 |
 | --- | --- |
-| `shared/locator.ts` | 纯函数单测：quote/prefix/suffix 生成、归一化、Jaccard 打分、候选选择 |
+| `shared/locator.ts` | 纯函数单测：quote/prefix/suffix 生成、归一化、Jaccard 打分、候选选择、区间内定位 |
+| `shared/references.ts` | 引用标记解析、去重、标签替换、目标缺失时的兜底文案 |
 | 章节切分与 Markdown 转换 | 输入固定文本，断言生成的章节数、标题、XHTML 结构 |
 | 搜索语句构造 | 断言长查询、短查询、含引号与 `*` 的查询被正确转义 |
-| 迁移执行 | 在内存数据库上从 0 迁到最新，断言表与索引存在；`002_pdf` 断言 `format` 接受 `pdf`、`page_count` 存在 |
-| 导出格式 | 固定标注集合 → 断言 Markdown 快照 |
+| 迁移执行 | 在内存数据库上从 0 迁到最新，断言表与索引存在；`002_pdf` 断言 `format` 接受 `pdf`、`page_count` 存在；`003_search_chunks` 断言索引清空且非 PDF 书回到未索引 |
+| 导出格式 | 固定标注集合 → 断言 Markdown 快照；含引用时断言替换成章节与原文标签 |
 
 不做 E2E：epub.js 的分页依赖真实 Chromium，改用 PRD §9 的清单手测，必要时用 `--remote-debugging-port` 走 CDP 抽查。
 
@@ -711,6 +756,9 @@ git tag v* → .github/workflows/release.yml（windows-latest）
 | 扫描件 PDF | 没有文字层，不能选中与标注 | 不做 OCR |
 | 固定版式 EPUB | 不支持 | 不做 |
 | 首次搜索前需要索引 | 导入即排队，但大书仍需几十秒 | 索引进度条与失败重试入口 |
+| 索引升级到段落级 | `003_search_chunks` 会清空旧索引，重建完成前书内搜索不完整 | 启动扫描自动补齐；界面提示「还在建索引」 |
+| 书内搜索范围 | 只覆盖 EPUB / Markdown / TXT；PDF 不参与全文索引 | PDF 全文检索与 OCR 另议 |
+| 标注引用 | 引用关系只存在批注 Markdown 里，删除目标不级联 | 显示「引用的标注已不存在」，导出同样写明；需要统计或图谱时再建引用表 |
 | trigram 索引体积 | 50 万字实测 1.47 倍（重复语料） | 用真实书复核，超 3 倍再改索引范围 |
 | `node:sqlite` 处于实验阶段 | API 可能随 Node/Electron 版本变化 | 全部调用收在 `electron/db/`，升级 Electron 时跑 `probe:fts` 与冒烟 |
 | 滚动模式的内部容器 | 通过 `rendition.manager.container` 访问 epub.js 内部对象 | epub.js 升级时若改名，退回键盘翻页并记录 |

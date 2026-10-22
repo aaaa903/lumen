@@ -98,12 +98,15 @@ export function registerSearchIpc(db: Db): void {
       ),
     )
     const tagId = typeof raw['tagId'] === 'string' && raw['tagId'].length > 0 ? raw['tagId'] : null
+    const bookId = typeof raw['bookId'] === 'string' && raw['bookId'].length > 0 ? raw['bookId'] : null
+    if (bookId) requireBook(db, bookId)
 
     return ok(
       search(db, {
         q,
         scope: readScope(raw['scope']),
         tagId,
+        bookId,
         limit,
       }),
     )

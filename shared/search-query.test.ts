@@ -5,6 +5,7 @@ import {
   MATCH_MIN_LENGTH,
   normalizeForMatch,
   planSearch,
+  snippetQuote,
 } from './search-query'
 
 describe('planSearch', () => {
@@ -63,5 +64,16 @@ describe('makeSnippet', () => {
 describe('normalizeForMatch', () => {
   it('压缩空白并转小写', () => {
     expect(normalizeForMatch('  A  B\nC ')).toBe('a b c')
+  })
+})
+
+describe('snippetQuote', () => {
+  it('去掉首尾省略号，保留上下文', () => {
+    expect(snippetQuote('…前后文都保留…')).toBe('前后文都保留')
+  })
+
+  it('没有省略号时原样返回，并去掉两端空白', () => {
+    expect(snippetQuote('  命中词在这里  ')).toBe('命中词在这里')
+    expect(snippetQuote('…')).toBe('')
   })
 })

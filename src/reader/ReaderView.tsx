@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ePub from 'epubjs'
 import type { Book as EpubBook, Contents, Location, Rendition } from 'epubjs'
 import type {
@@ -10,8 +10,11 @@ import type {
   OpenTarget,
   ShelfBook,
   Tag,
+  TextSearchHit,
 } from '../../shared/types'
-import { buildContext, findBestQuote, normalizeText } from '../../shared/locator'
+import { buildContext, findBestQuote, findQuoteWithin, normalizeText } from '../../shared/locator'
+import { parseReferenceIds } from '../../shared/references'
+import { snippetQuote } from '../../shared/search-query'
 import AnnotationRail from '../annotations/AnnotationRail'
 import ExportDialog from '../annotations/ExportDialog'
 import NoteEditor from '../annotations/NoteEditor'
@@ -37,6 +40,7 @@ import {
 import { applyReaderTheme, LINE_HEIGHT_KEYS, MARGIN_KEYS, READER_THEMES } from './theme'
 import { basename, flattenToc, normalizeHref, spineFallback } from './toc'
 import TocDrawer, { type TocEntry } from './TocDrawer'
+import ReaderSearch from './ReaderSearch'
 import { rangeFromOffsets, readSelection, type SelectionResult } from './selection'
 
 type ReaderStatus = 'loading' | 'ready' | 'error'
@@ -198,40 +202,56 @@ type LoadableSection = {
   cfiFromRange?: (range: Range) => string
 }
 
+/** 章节里的一段原文；start / end 是章节正文的 UTF-16 下标。 */
+type LocatedQuote = {
+  section: LoadableSection
+  document: Document
+  start: number
+  end: number
+}
+
 /**
- * 从搜索结果进入时，用临时高亮标出命中位置，6 秒后自动撤掉。
- * 找不到片段就只停在那一章，不打断阅读。
+ * 把「章节 + 原文片段」解析成章节内的原文区间。只加载章节取 DOM，不改变当前显示位置；
+ * 找不到片段时返回 null，调用方退回到章节开头。
  */
-async function flashSearchHit(
-  rendition: Rendition,
+async function locateQuote(
   book: EpubBook,
-  target: OpenTarget,
-): Promise<void> {
-  const href = normalizeHref(target.href)
-  const section = (href ? book.spine.get(href) : null) ?? book.spine.get(target.chapterIndex)
-  if (!section) return
+  href: string,
+  chapterIndex: number,
+  quote: string,
+): Promise<LocatedQuote | null> {
+  const cleanHref = normalizeHref(href)
+  const section = (cleanHref ? book.spine.get(cleanHref) : null) ?? book.spine.get(chapterIndex)
+  if (!section) return null
 
   const loadable = section as unknown as LoadableSection
   if (!loadable.document) {
     try {
       await (loadable.load?.(book.load.bind(book)) as unknown as Promise<unknown>)
     } catch {
-      return
+      return null
     }
   }
 
   const document = loadable.document
-  const quote = target.quote.trim()
-  if (!document || !quote) return
+  const needle = quote.trim()
+  if (!document || !needle) return null
 
   const text = document.body.textContent ?? ''
-  const best = findBestQuote(text, quote)
-  if (!best) return
-  const range = rangeFromOffsets(document, best.start, best.end)
-  if (!range || !loadable.cfiFromRange) return
+  const best = findBestQuote(text, needle)
+  if (!best) return null
+  return { section: loadable, document, start: best.start, end: best.end }
+}
 
-  const cfi = loadable.cfiFromRange(range)
-  if (!cfi) return
+/** 区间 → CFI；章节还没渲染过或不支持 CFI 时返回 null。 */
+function cfiFromOffsets(located: LocatedQuote, start: number, end: number): string | null {
+  const range = rangeFromOffsets(located.document, start, end)
+  if (!range || !located.section.cfiFromRange) return null
+  return located.section.cfiFromRange(range) || null
+}
+
+/** 临时高亮命中位置，6 秒后自动撤掉；章节已卸载时静默失败。 */
+function highlightSearchHit(rendition: Rendition, cfi: string): void {
   try {
     rendition.annotations.highlight(cfi, { id: 'lumen-search-hit' }, undefined, 'lumen-search-hit', {
       fill: '#f2c94c',
@@ -250,9 +270,35 @@ async function flashSearchHit(
   }
 }
 
+/**
+ * 从搜索结果进入时标出命中处。找不到片段就只停在那一章，不打断阅读。
+ */
+async function flashSearchHit(
+  rendition: Rendition,
+  book: EpubBook,
+  target: OpenTarget,
+): Promise<void> {
+  const located = await locateQuote(book, target.href, target.chapterIndex, target.quote)
+  if (!located) return
+  const match = target.match?.trim()
+  const inner = match
+    ? findQuoteWithin(
+        located.document.body.textContent ?? '',
+        located.start,
+        located.end,
+        match,
+      )
+    : null
+  const cfi = inner
+    ? cfiFromOffsets(located, inner.start, inner.end)
+    : cfiFromOffsets(located, located.start, located.end)
+  if (cfi) highlightSearchHit(rendition, cfi)
+}
+
 export default function ReaderView({ book, target, onExit }: ReaderViewProps) {
   const viewRef = useRef<HTMLDivElement | null>(null)
   const renditionRef = useRef<Rendition | null>(null)
+  const epubBookRef = useRef<EpubBook | null>(null)
   const tocRef = useRef<TocEntry[]>([])
   const spineLengthRef = useRef(0)
   const saveTimerRef = useRef<number | undefined>(undefined)
@@ -280,6 +326,7 @@ export default function ReaderView({ book, target, onExit }: ReaderViewProps) {
   const [prefs, setPrefs] = useState<ReaderPrefs>(readReaderPrefs)
   const [entries, setEntries] = useState<TocEntry[]>([])
   const [tocOpen, setTocOpen] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [chapterTitle, setChapterTitle] = useState('')
   const [activeHref, setActiveHref] = useState('')
@@ -307,6 +354,8 @@ export default function ReaderView({ book, target, onExit }: ReaderViewProps) {
   bookRef.current = book
   const tocOpenRef = useRef(tocOpen)
   tocOpenRef.current = tocOpen
+  const searchOpenRef = useRef(searchOpen)
+  searchOpenRef.current = searchOpen
   const settingsOpenRef = useRef(settingsOpen)
   settingsOpenRef.current = settingsOpen
   annotationsRef.current = annotations
@@ -488,17 +537,33 @@ export default function ReaderView({ book, target, onExit }: ReaderViewProps) {
     showToast('已加书签')
   }, [showToast])
 
-  const handleSelectAnnotation = useCallback((annotation: Annotation) => {
-    setSelection(null)
-    setRailOpen(true)
-    setEditingId(annotation.id)
-    if (annotation.orphaned === 1 || !annotation.locator.cfi) return
-    const rendition = renditionRef.current
-    if (!rendition) return
-    void Promise.resolve(rendition.display(annotation.locator.cfi)).catch((error: unknown) => {
-      console.warn('[Lumen] 标注跳转失败', annotation.id, error)
-    })
-  }, [])
+  const handleSelectAnnotation = useCallback(
+    (annotation: Annotation, draft?: { color: AnnotationColor; noteMd: string }) => {
+      // 从批注编辑器跳到另一条标注时，先把草稿落库；不关闭编辑器，交给下面的 setEditingId 换人。
+      const currentId = editingIdRef.current
+      if (draft && currentId && currentId !== annotation.id) {
+        void api
+          .updateAnnotation({ id: currentId, color: draft.color, noteMd: draft.noteMd })
+          .then((result) => {
+            if (!result.ok) return
+            setAnnotations((previous) =>
+              previous.map((item) => (item.id === currentId ? result.data : item)),
+            )
+          })
+      }
+
+      setSelection(null)
+      setRailOpen(true)
+      setEditingId(annotation.id)
+      if (annotation.orphaned === 1 || !annotation.locator.cfi) return
+      const rendition = renditionRef.current
+      if (!rendition) return
+      void Promise.resolve(rendition.display(annotation.locator.cfi)).catch((error: unknown) => {
+        console.warn('[Lumen] 标注跳转失败', annotation.id, error)
+      })
+    },
+    [],
+  )
 
   const saveNote = useCallback(
     async (patch: { color: AnnotationColor; noteMd: string }) => {
@@ -575,6 +640,15 @@ export default function ReaderView({ book, target, onExit }: ReaderViewProps) {
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      if (
+        target &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+      ) {
+        // 输入框里的方向键与空格属于光标操作，不能触发翻页。
+        return
+      }
+
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'b') {
         event.preventDefault()
         void addBookmark()
@@ -583,6 +657,17 @@ export default function ReaderView({ book, target, onExit }: ReaderViewProps) {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'e') {
         event.preventDefault()
         if (!editingIdRef.current) setRailOpen(true)
+        return
+      }
+      if (
+        bookRef.current.format !== 'pdf' &&
+        (event.ctrlKey || event.metaKey) &&
+        event.key.toLowerCase() === 'f'
+      ) {
+        event.preventDefault()
+        setTocOpen(false)
+        setSettingsOpen(false)
+        setSearchOpen(true)
         return
       }
 
@@ -611,6 +696,8 @@ export default function ReaderView({ book, target, onExit }: ReaderViewProps) {
             setSettingsOpen(false)
           } else if (tocOpenRef.current) {
             setTocOpen(false)
+          } else if (searchOpenRef.current) {
+            setSearchOpen(false)
           } else {
             void exitReader()
           }
@@ -779,6 +866,7 @@ export default function ReaderView({ book, target, onExit }: ReaderViewProps) {
         epubBook = ePub(bytes)
         await epubBook.ready
         if (disposed) return
+        epubBookRef.current = epubBook
 
         const navigation = await epubBook.loaded.navigation
         if (disposed) return
@@ -888,8 +976,19 @@ export default function ReaderView({ book, target, onExit }: ReaderViewProps) {
         // 从搜索进入时直接跳到命中章节；否则按上次进度续读。
         const jumpTarget = target && target.bookId === bookRef.current.id ? target : null
         if (jumpTarget && jumpTarget.href) {
+          // 检索命中时直接落到原文片段，而不是只跳到章节开头。
+          const located = epubBook
+            ? await locateQuote(
+                epubBook,
+                jumpTarget.href,
+                jumpTarget.chapterIndex,
+                jumpTarget.quote,
+              )
+            : null
+          const jumpCfi = located ? cfiFromOffsets(located, located.start, located.end) : null
+          const fallbackHref = normalizeHref(jumpTarget.href)
           try {
-            await rendition.display(normalizeHref(jumpTarget.href))
+            await rendition.display(jumpCfi ?? (fallbackHref.length > 0 ? fallbackHref : undefined))
           } catch {
             await rendition.display(startCfi ?? undefined)
           }
@@ -986,6 +1085,7 @@ export default function ReaderView({ book, target, onExit }: ReaderViewProps) {
       contentsRef.current = null
       highlightCfisRef.current = []
       renditionRef.current = null
+      epubBookRef.current = null
       // 顺序不能反：先 rendition 再 book，各自兜住异常，避免留下 iframe。
       try {
         rendition?.destroy()
@@ -1065,10 +1165,67 @@ export default function ReaderView({ book, target, onExit }: ReaderViewProps) {
   const editingAnnotation = editingId
     ? annotations.find((annotation) => annotation.id === editingId) ?? null
     : null
+
+  /** 反向引用：哪几条批注的正文里引用了某条标注。引用关系只存在 Markdown 里。 */
+  const backrefsByTarget = useMemo(() => {
+    const map = new Map<string, Annotation[]>()
+    for (const source of annotations) {
+      for (const targetId of parseReferenceIds(source.noteMd)) {
+        if (targetId === source.id) continue
+        const list = map.get(targetId) ?? []
+        list.push(source)
+        map.set(targetId, list)
+      }
+    }
+    return map
+  }, [annotations])
+
   const goChapter = (step: 1 | -1) => {
     const next = entries[chapterIndex + step]
     if (next) goTo(next.href)
   }
+
+  const jumpToSearchHit = useCallback(async (hit: TextSearchHit) => {
+    const rendition = renditionRef.current
+    const epubBook = epubBookRef.current
+    if (!rendition) return
+
+    // 先按片段（带前后文）定位到命中段落，再把范围缩到命中的那几个字：
+    // 只拿命中词去搜，同一章里的重复词会把读者带到第一处。
+    const matched = hit.snippet.slice(hit.matchStart, hit.matchStart + hit.matchLength)
+    let cfi: string | null = null
+    if (epubBook) {
+      const located = await locateQuote(
+        epubBook,
+        hit.href,
+        hit.chapterIndex,
+        snippetQuote(hit.snippet),
+      )
+      if (located) {
+        const inner = matched
+          ? findQuoteWithin(
+              located.document.body.textContent ?? '',
+              located.start,
+              located.end,
+              matched,
+            )
+          : null
+        cfi = inner
+          ? cfiFromOffsets(located, inner.start, inner.end)
+          : cfiFromOffsets(located, located.start, located.end)
+      }
+    }
+
+    const fallback = normalizeHref(hit.href)
+    try {
+      // 有 CFI 就落到命中处；片段对不上时退回章节开头，不让点击变成无反应。
+      await rendition.display(cfi ?? (fallback.length > 0 ? fallback : undefined))
+    } catch (error) {
+      console.warn('[Lumen] 书内搜索跳转失败', hit.href, error)
+    }
+    setSearchOpen(false)
+    if (cfi) highlightSearchHit(rendition, cfi)
+  }, [])
 
   const toggleFullscreen = async () => {
     try {
@@ -1094,6 +1251,20 @@ export default function ReaderView({ book, target, onExit }: ReaderViewProps) {
           {chapterTitle && <span className="reader-chapter">{chapterTitle}</span>}
         </div>
         <div className="reader-actions">
+          {book.format !== 'pdf' && (
+            <button
+              type="button"
+              className={`icon-btn ${searchOpen ? 'is-active' : ''}`}
+              onClick={() => {
+                setSearchOpen((open) => !open)
+                setTocOpen(false)
+                setSettingsOpen(false)
+              }}
+              title="书内搜索（Ctrl+F）"
+            >
+              搜索
+            </button>
+          )}
           <button
             type="button"
             className={`icon-btn ${railOpen ? 'is-active' : ''}`}
@@ -1109,7 +1280,11 @@ export default function ReaderView({ book, target, onExit }: ReaderViewProps) {
           <button
             type="button"
             className={`icon-btn ${tocOpen ? 'is-active' : ''}`}
-            onClick={() => setTocOpen((open) => !open)}
+            onClick={() => {
+              setTocOpen((open) => !open)
+              setSearchOpen(false)
+              setSettingsOpen(false)
+            }}
             title="目录"
           >
             目录
@@ -1117,7 +1292,11 @@ export default function ReaderView({ book, target, onExit }: ReaderViewProps) {
           <button
             type="button"
             className={`icon-btn ${settingsOpen ? 'is-active' : ''}`}
-            onClick={() => setSettingsOpen((open) => !open)}
+            onClick={() => {
+              setSettingsOpen((open) => !open)
+              setSearchOpen(false)
+              setTocOpen(false)
+            }}
             title="排版"
           >
             排版
@@ -1262,6 +1441,15 @@ export default function ReaderView({ book, target, onExit }: ReaderViewProps) {
           />
         )}
 
+        {searchOpen && book.format !== 'pdf' && (
+          <ReaderSearch
+            bookId={book.id}
+            indexed={book.indexedAt !== null}
+            onJump={(hit) => void jumpToSearchHit(hit)}
+            onClose={() => setSearchOpen(false)}
+          />
+        )}
+
         {selection && (
           <SelectionMenu
             anchor={selection.anchor}
@@ -1281,9 +1469,12 @@ export default function ReaderView({ book, target, onExit }: ReaderViewProps) {
             assignedTagIds={annotationTags
               .filter((item) => item.annotationId === editingAnnotation.id)
               .map((item) => item.tagId)}
+            bookAnnotations={annotations}
+            backrefs={backrefsByTarget.get(editingAnnotation.id) ?? []}
             onToggleTag={(tagId) => void toggleAnnotationTag(tagId)}
             onCreateTag={(name) => void createTagForAnnotation(name)}
             onSave={(patch) => void saveNote(patch)}
+            onOpenAnnotation={handleSelectAnnotation}
             onDelete={() => void deleteAnnotation(editingAnnotation)}
             onClose={() => setEditingId(null)}
           />
@@ -1291,6 +1482,7 @@ export default function ReaderView({ book, target, onExit }: ReaderViewProps) {
           railOpen && (
             <AnnotationRail
               annotations={annotations}
+              backrefs={backrefsByTarget}
               activeId={editingId}
               selectedIds={selectedIds}
               exporting={exporting}

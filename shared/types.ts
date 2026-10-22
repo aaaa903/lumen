@@ -145,6 +145,8 @@ export type SearchInput = {
   scope: SearchScope
   /** 只搜某个标签下的标注；scope 为 text 时忽略。 */
   tagId?: string | null
+  /** 只搜这一本书；为空表示整库。书内搜索用它。 */
+  bookId?: string | null
   limit?: number
 }
 
@@ -185,7 +187,10 @@ export type OpenTarget = {
   href: string
   chapterIndex: number
   chapterTitle: string
+  /** 定位用的原文片段；检索结果会带上前后文，避免重复词贴错位置。 */
   quote: string
+  /** 片段里真正要标出的那几个字；为空时整段高亮。 */
+  match?: string
 }
 
 export type Tag = {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import { GlobalWorkerOptions, TextLayer, getDocument } from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
@@ -14,6 +14,7 @@ import type {
   Tag,
 } from '../../shared/types'
 import { buildContext, findBestQuote, normalizeText } from '../../shared/locator'
+import { parseReferenceIds } from '../../shared/references'
 import AnnotationRail from '../annotations/AnnotationRail'
 import ExportDialog from '../annotations/ExportDialog'
 import NoteEditor from '../annotations/NoteEditor'
@@ -648,14 +649,30 @@ export default function PdfViewer({ book, target, onExit }: PdfViewerProps) {
     showToast('已加书签')
   }, [showToast])
 
-  const handleSelectAnnotation = useCallback((annotation: Annotation) => {
-    setSelection(null)
-    setRailOpen(true)
-    setEditingId(annotation.id)
-    if (annotation.orphaned === 1) return
-    const pageNumber = clampPage(annotation.locator.page, numPagesRef.current)
-    scrollToPage(pageNumber)
-  }, [scrollToPage])
+  const handleSelectAnnotation = useCallback(
+    (annotation: Annotation, draft?: { color: AnnotationColor; noteMd: string }) => {
+      // 与 EPUB 阅读器一致：从批注里跳到另一条时先把草稿落库。
+      const currentId = editingIdRef.current
+      if (draft && currentId && currentId !== annotation.id) {
+        void api
+          .updateAnnotation({ id: currentId, color: draft.color, noteMd: draft.noteMd })
+          .then((result) => {
+            if (!result.ok) return
+            setAnnotations((previous) =>
+              previous.map((item) => (item.id === currentId ? result.data : item)),
+            )
+          })
+      }
+
+      setSelection(null)
+      setRailOpen(true)
+      setEditingId(annotation.id)
+      if (annotation.orphaned === 1) return
+      const pageNumber = clampPage(annotation.locator.page, numPagesRef.current)
+      scrollToPage(pageNumber)
+    },
+    [scrollToPage],
+  )
 
   const saveNote = useCallback(
     async (patch: { color: AnnotationColor; noteMd: string }) => {
@@ -1187,6 +1204,21 @@ export default function PdfViewer({ book, target, onExit }: PdfViewerProps) {
   const editingAnnotation = editingId
     ? annotations.find((annotation) => annotation.id === editingId) ?? null
     : null
+
+  /** 反向引用：哪几条批注引用了某条标注；PDF 与 EPUB 共用同一套引用语法。 */
+  const backrefsByTarget = useMemo(() => {
+    const map = new Map<string, Annotation[]>()
+    for (const source of annotations) {
+      for (const targetId of parseReferenceIds(source.noteMd)) {
+        if (targetId === source.id) continue
+        const list = map.get(targetId) ?? []
+        list.push(source)
+        map.set(targetId, list)
+      }
+    }
+    return map
+  }, [annotations])
+
   const colors = READER_THEMES[prefs.theme]
 
   const updatePrefs = (patch: Partial<ReaderPrefs>): void => {
@@ -1365,9 +1397,12 @@ export default function PdfViewer({ book, target, onExit }: PdfViewerProps) {
             assignedTagIds={annotationTags
               .filter((item) => item.annotationId === editingAnnotation.id)
               .map((item) => item.tagId)}
+            bookAnnotations={annotations}
+            backrefs={backrefsByTarget.get(editingAnnotation.id) ?? []}
             onToggleTag={(tagId) => void toggleAnnotationTag(tagId)}
             onCreateTag={(name) => void createTagForAnnotation(name)}
             onSave={(patch) => void saveNote(patch)}
+            onOpenAnnotation={handleSelectAnnotation}
             onDelete={() => void deleteAnnotation(editingAnnotation)}
             onClose={() => setEditingId(null)}
           />
@@ -1375,6 +1410,7 @@ export default function PdfViewer({ book, target, onExit }: PdfViewerProps) {
           railOpen && (
             <AnnotationRail
               annotations={annotations}
+              backrefs={backrefsByTarget}
               activeId={editingId}
               selectedIds={selectedIds}
               exporting={exporting}

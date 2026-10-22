@@ -8,7 +8,7 @@ Lumen：本地优先的阅读、标注与知识库桌面应用（Windows，Elect
 
 无账号、无云端、零网络请求。产品边界见 [PRD.md](./PRD.md)，实现细节见 [TECH_DESIGN.md](./TECH_DESIGN.md)。
 
-当前状态：**V1 已发布（`0.2.0`，2026-10-22）**——在 0.1.0 的基础上增加 PDF 阅读与标注、滚动阅读模式、导入即后台索引、整个书库的标注导出。仓库 https://github.com/aaaa903/lumen ，Release v0.2.0 提供 setup 与 portable，官网 https://aaaa903.github.io/lumen/ 。推送 `v*` 标签即走完整发布流水线。下一步（书内搜索、双向引用、macOS）尚未开始。
+当前状态：**V1.1 待发布（`0.3.0`，2026-10-22）**——在 V1 的基础上增加书内搜索（`Ctrl+F`）、批注之间的引用与反向引用、段落级检索索引。仓库 https://github.com/aaaa903/lumen ，最新公开版本仍是 v0.2.0，官网 https://aaaa903.github.io/lumen/ 。推送 `v*` 标签即走完整发布流水线。下一步（macOS 构建、PDF 全文检索）尚未开始。
 
 ## 命令
 
@@ -44,7 +44,7 @@ node scripts/copy-pdfjs-assets.mjs     # 单独补 public/pdfjs/（predev / preb
 | `electron/preload.ts` | `contextBridge` 白名单 | 新增 IPC 通道时必须同步 |
 | `electron/ipc/*.ts` | 通道注册、参数校验、错误包装；`open-files.ts` 处理「用 Lumen 打开」与第二实例转交 | 改接口契约（同时改 `shared/types.ts`） |
 | `electron/db/open.ts` | 打开数据库、PRAGMA、迁移执行、备份 | 改 schema 版本或迁移策略 |
-| `electron/db/migrations/*.sql` | 迁移脚本，只增不改；`002_pdf.sql` 重建 `books` 支持 PDF | 加表、加列、加索引 |
+| `electron/db/migrations/*.sql` | 迁移脚本，只增不改；`002_pdf.sql` 重建 `books` 支持 PDF，`003_search_chunks.sql` 清空旧索引等待按段落重建 | 加表、加列、加索引 |
 | `electron/db/repositories/*.ts` | 全部 SQL（`books` / `progress` / `annotations` / `search` / `tags` / `notes` / `settings`） | 改查询；不要把 SQL 写到别处 |
 | `electron/library/import.ts` | 导入编排：一次性读取、SHA-256、去重、写文件、元数据、封面 | 改导入流程 |
 | `electron/library/paths.ts` | 相对 userData 的路径解析与越界防护 | 改文件落点 |
@@ -55,9 +55,12 @@ node scripts/copy-pdfjs-assets.mjs     # 单独补 public/pdfjs/（predev / preb
 | `shared/types.ts` | 主进程与渲染层共用的类型 | 改数据形状 |
 | `shared/locator.ts` | locator 的生成、校验、重锚打分 | 改标注定位（必须加单测） |
 | `shared/search-query.ts` | MATCH / LIKE 参数生成、片段截取 | 改搜索（必须加单测） |
+| `shared/references.ts` | 批注引用 `[[ann:<id>]]` 的解析、去重、标签替换 | 改引用语法或导出文案（必须加单测） |
 | `shared/export.ts` | 标注 → Markdown 的纯函数 | 改导出格式 |
 | `src/reader/*` | epub.js 生命周期、分页与滚动、目录、主题、进度、索引循环 | 改阅读体验 |
 | `src/reader/PdfViewer.tsx` | pdf.js 渲染、缩放、页码进度、PDF 目录与标注 | 改 PDF 阅读（唯一允许碰 `pdfjs-dist` 的地方） |
+| `src/reader/ReaderSearch.tsx` | 书内搜索面板：检索当前书、跳转命中 | 改书内搜索交互 |
+| `src/search/Snippet.tsx` | 检索片段里标出命中词 | 改结果片段样式或高亮规则 |
 | `src/reader/IndexWorker.tsx` | 隐藏窗口里的索引循环，领任务 → 建索引 → 回报 | 改后台索引行为 |
 | `src/reader/toc.ts` | 目录 href 归一化、递归展平、spine 兜底 | 改目录解析 |
 | `src/annotations/*` | 选中工具条、高亮渲染、侧栏、批注编辑器 | 改标注交互 |
@@ -65,6 +68,7 @@ node scripts/copy-pdfjs-assets.mjs     # 单独补 public/pdfjs/（predev / preb
 | `src/settings/SettingsDialog.tsx` | 数据目录、版本信息、清空数据 | 改设置项（不要新增一级入口） |
 | `src/search/*`、`src/notes/*` | 搜索、笔记与标签视图 | 改知识库 |
 | `src/lib/api.ts` | 类型化 IPC 客户端，唯一调用 `window.lumen` 的地方 | 新增通道 |
+| `src/lib/note-markdown.ts` | 批注 Markdown 渲染，把引用标记变成站内链接 | 改批注预览 |
 | `shared/export.ts` | 标注导出 Markdown（纯函数） | 改导出格式 |
 | `src/styles.css` | 全部样式，含配色变量 | 任何视觉调整 |
 | `scripts/release-assets.mjs` | 计算产物 SHA-256、写 `SHA256SUMS.txt`、回填 `releases.json` | 改发布流程或产物命名 |
@@ -91,7 +95,7 @@ node scripts/copy-pdfjs-assets.mjs     # 单独补 public/pdfjs/（predev / preb
 
 ## 数据层规则
 
-- schema 变更必须：新建 `migrations/NNN_*.sql` + 提升 `PRAGMA user_version` + 在 `docs` 与本文同步。老数据兼容优先，宁加列不删列。当前版本为 `2`（`002_pdf` 给 `books` 加 `page_count` 并把 `format` 枚举扩到 `pdf`）。
+- schema 变更必须：新建 `migrations/NNN_*.sql` + 提升 `PRAGMA user_version` + 在 `docs` 与本文同步。老数据兼容优先，宁加列不删列。当前版本为 `3`（`003_search_chunks` 是纯数据迁移：清空旧索引并把非 PDF 书的 `indexed_at` 置空，等待按段落重建）。
 - 需要重建表的迁移：在事务外先 `PRAGMA foreign_keys = OFF`，迁移后立即恢复并跑 `PRAGMA foreign_key_check`，否则 `DROP TABLE` 会级联清空子表。
 - 迁移前自动备份数据库到 `userData/backups/`，保留最近 3 份。
 - 读路径默认过滤 `deleted_at IS NOT NULL` 的行；软删是默认，物理删除只发生在「彻底删除」与文件清理。
@@ -105,6 +109,9 @@ node scripts/copy-pdfjs-assets.mjs     # 单独补 public/pdfjs/（predev / preb
 - PDF 的标题 / 作者 / 页数由渲染层回填，只允许 `updatePdfMeta` 改 `format = 'pdf'` 的行；EPUB 元数据不能被覆盖。
 - 索引只由 `electron/indexer.ts` 排队，不要在阅读器里直接调 `search:indexBegin`；导入成功、打开未索引的书、启动扫描是仅有的三个入口。
 - 索引用 `indexed_at` 表示状态；PDF 导入即写时间戳，其余书等 `indexer:complete(ok=true)` 才写。
+- 索引按块级段落切块（单块上限 2000 字），一块一条 `search_chunks`；不要让一章只存一条，否则书内搜索只能报每章第一处。
+- 改索引切块规则时必须加迁移清空旧索引并重置 `indexed_at`，不能指望旧数据自行变新。
+- 批注引用只以 `[[ann:<id>]]` 存在 `annotations.note_md` 里，不建引用表、不新增字段；删除目标不级联，展示与导出统一用 `shared/references.ts` 的兜底文案。
 
 ## 使用 epub.js 的硬约束（旧版踩过的坑，仍然适用）
 
@@ -145,6 +152,7 @@ node scripts/copy-pdfjs-assets.mjs     # 单独补 public/pdfjs/（predev / preb
 - 重锚写回 cfi 时必须在 `rendition.display()` 完成后、且 `contents` 可用时进行。
 - 跨段落高亮按块级元素拆分，共用 `group_id`；删除一条时按 `group_id` 整组询问。
 - 批注只存 Markdown 源，渲染时 `markdown-it` + `dompurify`；不要把渲染后的 HTML 入库。
+- 引用标记只认 `[[ann:<8–64 位十六进制或连字符>]]`，不要用普通方括号或全局替换 HTML；预览里的站内链接只允许 `#` 开头的地址。
 
 ## 改动自检（结束前逐条确认）
 
@@ -158,6 +166,9 @@ node scripts/copy-pdfjs-assets.mjs     # 单独补 public/pdfjs/（predev / preb
 - [ ] 若改了导出：单书导出与「导出全部标注」内容一致，重名文件不覆盖
 - [ ] 若改了标注定位：跑一次「外部改写文件后重锚」场景
 - [ ] 若改了搜索：测两字中文、英文单词、含引号查询、空结果
+- [ ] 若改了书内搜索：同一章的多个命中分别成条，点击跳到原文并临时高亮；PDF 不显示入口
+- [ ] 若改了批注引用：插入引用、预览跳转、侧栏「引用 / 被引」、导出解析、目标删除后的兜底都正常
+- [ ] 若改了索引切块：从旧库升级后非 PDF 书重新排队，重建完成前提示「还在建索引」
 - [ ] 若改了数据模型：旧库可迁移，或写清楚不兼容与迁移方式
 - [ ] 若改了桌面壳：`npm run pack` 成功（本机开智能应用控制时改用 `pack:portable`，安装包看 CI），安装版与 portable.zip 都能启动并读到同一份数据
 - [ ] 若改了官网：`npm run site:build` 成功，断网打开无外部请求，下载链接与校验和指向最新版本
@@ -173,6 +184,8 @@ node scripts/copy-pdfjs-assets.mjs     # 单独补 public/pdfjs/（predev / preb
 | `npm install` 卡在下载 Electron | 设置 `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/` 后执行 `node node_modules/electron/install.js` |
 | 数据库写入报 `SQLITE_BUSY` | 有第二个进程占用；确认单实例锁生效，检查是否遗留的 dev 窗口 |
 | 搜索中文无结果 | 确认 `search_chunks` 有数据（`books.indexed_at` 非空）、FTS 表存在、查询长度 < 3 时走了 LIKE 分支 |
+| 书内搜索只报每章第一处 | 旧索引还是「一章一块」；确认数据库已升到 v3、`indexed_at` 被重置，并等后台重建完成 |
+| 批注引用显示「已不存在」 | 检查目标标注是否被彻底删除、标记里的 id 是否完整；引用不会级联删除，属于预期提示 |
 | 标注位置漂移 | 看该条 `quote` 是否为空、`orphaned` 是否为 1，重锚打分是否低于 0.6；PDF 标注还看页码是否越界 |
 | PDF 页面空白 | 确认 `public/pdfjs/` 已生成；看控制台是否拒绝加载 `pdf.worker.min-*.mjs`（CSP `worker-src`） |
 | PDF 中文显示方块 | `cMapUrl` 是否指向 `pdfjs/cmaps/`，`copy-pdfjs-assets.mjs` 是否在 `predev` / `prebuild` 里跑过 |

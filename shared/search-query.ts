@@ -81,3 +81,11 @@ export function makeSnippet(text: string, query: string, radius = 42): Snippet {
 export function normalizeForMatch(input: string): string {
   return collapse(input).toLowerCase()
 }
+
+/**
+ * 检索片段去掉首尾省略号后，可以作为定位用的 quote。
+ * 带上前后文比只拿命中词更不容易贴错位置：同一个词在一章里可能出现几十次。
+ */
+export function snippetQuote(snippet: string): string {
+  return snippet.replace(/^…+/, '').replace(/…+$/, '').trim()
+}

@@ -45,23 +45,23 @@
 
 ```json
 {
-  "latest": "0.2.0",
+  "latest": "0.3.0",
   "releases": [
     {
-      "version": "0.2.0",
-      "tag": "v0.2.0",
+      "version": "0.3.0",
+      "tag": "v0.3.0",
       "date": "2026-10-22",
-      "notes": ["新增 PDF 阅读与标注", "分页与滚动模式", "导入即后台索引", "整库导出标注"],
+      "notes": ["书内搜索", "标注引用", "段落级索引"],
       "assets": {
         "setup": {
-          "name": "Lumen-0.2.0-setup.exe",
-          "url": "https://github.com/<owner>/lumen/releases/download/v0.2.0/Lumen-0.2.0-setup.exe",
+          "name": "Lumen-0.3.0-setup.exe",
+          "url": "https://github.com/<owner>/lumen/releases/download/v0.3.0/Lumen-0.3.0-setup.exe",
           "size": 118000000,
           "sha256": "…"
         },
         "portable": {
-          "name": "Lumen-0.2.0-portable.zip",
-          "url": "https://github.com/<owner>/lumen/releases/download/v0.2.0/Lumen-0.2.0-portable.zip",
+          "name": "Lumen-0.3.0-portable.zip",
+          "url": "https://github.com/<owner>/lumen/releases/download/v0.3.0/Lumen-0.3.0-portable.zip",
           "size": 140000000,
           "sha256": "…"
         }

@@ -50,7 +50,10 @@ export function registerExportIpc(db: Db): void {
     const all = listAnnotations(db, bookId)
     const selected = ids.length > 0 ? all.filter((item) => ids.includes(item.id)) : all
 
-    const markdown = buildAnnotationsMarkdown(book, selected, app.getVersion())
+    const markdown = buildAnnotationsMarkdown(book, selected, app.getVersion(), {
+      // 只导出勾选项时，引用解析仍要看到整本书，否则会显示「引用已不存在」。
+      referencePool: all,
+    })
     return ok({ markdown, count: selected.length })
   })
 

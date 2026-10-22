@@ -10,7 +10,53 @@ import type { TocEntry } from './TocDrawer'
 
 /** 每批提交的字符数上限，避免一次 IPC 传几十兆。 */
 const BATCH_CHARS = 300_000
-const MAX_CHAPTER_CHARS = 500_000
+/** 单块上限：有的书把整章塞进一个 <p>，按字数再切开，避免一条命中覆盖整章。 */
+const MAX_CHUNK_CHARS = 2_000
+
+/** 块级元素是天然的段落边界；同一段里的行内标签（em、a）不该被切开。 */
+const BLOCK_SELECTOR =
+  'p, h1, h2, h3, h4, h5, h6, li, blockquote, pre, dd, dt, td, th, figcaption, div'
+
+function splitLong(text: string): string[] {
+  if (text.length <= MAX_CHUNK_CHARS) return [text]
+  const pieces: string[] = []
+  for (let start = 0; start < text.length; start += MAX_CHUNK_CHARS) {
+    pieces.push(text.slice(start, start + MAX_CHUNK_CHARS))
+  }
+  return pieces
+}
+
+/**
+ * 把一章正文按块级元素切成段落再入库。
+ * 逐文本节点走：文本归于它最近的块级祖先，<li><p> 这类嵌套不会被统计两次。
+ * 段落级索引让书内搜索能列出每一处命中，而不是「一章只报第一个」。
+ */
+export function chunkParagraphs(body: HTMLElement): string[] {
+  const chunks: string[] = []
+  let buffer = ''
+  let owner: Element | null = null
+
+  const flush = (): void => {
+    const text = buffer.replace(/\s+/g, ' ').trim()
+    buffer = ''
+    if (text.length === 0) return
+    chunks.push(...splitLong(text))
+  }
+
+  const walker = body.ownerDocument.createTreeWalker(body, NodeFilter.SHOW_TEXT)
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const parent = node.parentElement
+    if (!parent) continue
+    const block = parent.closest(BLOCK_SELECTOR) ?? body
+    if (block !== owner) {
+      flush()
+      owner = block
+    }
+    buffer += node.nodeValue ?? ''
+  }
+  flush()
+  return chunks
+}
 
 type SpineItem = { href?: string }
 
@@ -86,7 +132,8 @@ export async function indexBook(
       }
       if (shouldStop()) return false
 
-      const text = raw.document?.body?.textContent ?? ''
+      const body = raw.document?.body
+      const pieces = body ? chunkParagraphs(body) : []
       const href = normalizeHref(raw.href ?? spineItems[index]?.href ?? '')
       try {
         raw.unload?.()
@@ -94,17 +141,17 @@ export async function indexBook(
         // 章节尚未完整加载时 unload 会抛，忽略。
       }
 
-      if (text.trim().length === 0) continue
-      batch.push({
-        chapterIndex: index,
-        chapterTitle: chapterTitleFor(toc, href, index),
-        href,
-        text: text.slice(0, MAX_CHAPTER_CHARS),
-      })
-      batchChars += Math.min(text.length, MAX_CHAPTER_CHARS)
-
-      if (batchChars >= BATCH_CHARS) {
-        if (!(await flush())) return false
+      for (const piece of pieces) {
+        batch.push({
+          chapterIndex: index,
+          chapterTitle: chapterTitleFor(toc, href, index),
+          href,
+          text: piece,
+        })
+        batchChars += piece.length
+        if (batchChars >= BATCH_CHARS) {
+          if (!(await flush())) return false
+        }
       }
     }
 

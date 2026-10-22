@@ -1,8 +1,11 @@
 import type { Annotation } from '../../shared/types'
+import { parseReferenceIds, stripReferences } from '../../shared/references'
 import { HIGHLIGHT_COLORS } from './colors'
 
 type AnnotationRailProps = {
   annotations: Annotation[]
+  /** 反向引用：目标标注 id → 引用它的批注。 */
+  backrefs: Map<string, Annotation[]>
   activeId: string | null
   selectedIds: Set<string>
   exporting: boolean
@@ -49,6 +52,7 @@ function groupByChapter(annotations: Annotation[]): ChapterGroup[] {
 /** 本书标注侧栏：按章节分组，点击跳转；位置失效的条目保留原文，只禁用跳转。 */
 export default function AnnotationRail({
   annotations,
+  backrefs,
   activeId,
   selectedIds,
   exporting,
@@ -106,6 +110,8 @@ export default function AnnotationRail({
                 {group.items.map((annotation) => {
                   const colors = HIGHLIGHT_COLORS[annotation.color]
                   const isBookmark = annotation.kind === 'bookmark'
+                  const referenceCount = parseReferenceIds(annotation.noteMd).length
+                  const backrefCount = backrefs.get(annotation.id)?.length ?? 0
                   return (
                     <li
                       className={`rail-item ${annotation.id === activeId ? 'is-active' : ''} ${
@@ -142,6 +148,19 @@ export default function AnnotationRail({
                           {annotation.orphaned === 1 && (
                             <span className="rail-orphan">位置失效</span>
                           )}
+                          {referenceCount > 0 && (
+                            <span className="rail-ref" title={`这条批注引用了 ${referenceCount} 条标注`}>
+                              引用 {referenceCount}
+                            </span>
+                          )}
+                          {backrefCount > 0 && (
+                            <span
+                              className="rail-ref is-back"
+                              title={`有 ${backrefCount} 条批注引用了它`}
+                            >
+                              被引 {backrefCount}
+                            </span>
+                          )}
                         </span>
                         <span className="rail-quote">
                           {annotation.locator.quote ||
@@ -149,7 +168,9 @@ export default function AnnotationRail({
                             '未命名位置'}
                         </span>
                         {annotation.noteMd.trim() && (
-                          <span className="rail-note">{annotation.noteMd.trim()}</span>
+                          <span className="rail-note">
+                            {stripReferences(annotation.noteMd.trim())}
+                          </span>
                         )}
                       </button>
                       <button

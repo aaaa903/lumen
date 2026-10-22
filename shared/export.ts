@@ -4,12 +4,23 @@
  */
 
 import type { Annotation, Book } from './types'
+import { referenceLabel, replaceReferences } from './references'
 
 export type ExportBook = Pick<Book, 'title' | 'author'>
 export type ExportAnnotation = Pick<
   Annotation,
-  'kind' | 'color' | 'locator' | 'noteMd' | 'createdAt'
+  'id' | 'kind' | 'color' | 'locator' | 'noteMd' | 'createdAt'
 >
+
+export type ExportOptions = {
+  exportedAt?: Date
+  /**
+   * 解析批注之间引用时用的标注池。默认与导出的标注相同；
+   * 只导出勾选的几条时，调用方要把整本书的标注传进来，
+   * 否则引用会被误判成「已不存在」。
+   */
+  referencePool?: ExportAnnotation[]
+}
 
 /** YAML 双引号字符串与 JSON 字符串的转义规则一致。 */
 function yamlString(input: string): string {
@@ -63,8 +74,17 @@ export function buildAnnotationsMarkdown(
   book: ExportBook,
   annotations: ExportAnnotation[],
   version: string,
-  exportedAt: Date = new Date(),
+  options: ExportOptions = {},
 ): string {
+  const exportedAt = options.exportedAt ?? new Date()
+  const pool = options.referencePool ?? annotations
+  const byId = new Map(pool.map((item) => [item.id, item]))
+  // 引用在 Markdown 里只有 id，导出时换成「章节 + 原文」，脱离应用也能读懂。
+  const resolveReference = (id: string): string | null => {
+    const target = byId.get(id)
+    return target ? referenceLabel(target.locator, 40) : null
+  }
+
   const lines: string[] = [
     '---',
     `title: ${yamlString(book.title)}`,
@@ -88,7 +108,7 @@ export function buildAnnotationsMarkdown(
     lines.push(`## ${group.title}`, '')
     for (const annotation of group.items) {
       const quote = annotation.locator.quote.trim()
-      const note = annotation.noteMd.trim()
+      const note = replaceReferences(annotation.noteMd.trim(), resolveReference)
       if (annotation.kind === 'bookmark') {
         lines.push(quoteBlock('（书签）'))
       } else if (quote) {

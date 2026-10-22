@@ -73,10 +73,23 @@ function toTextHit(row: ChunkRow, query: string): TextSearchHit {
 }
 
 /** 正文检索：3 字以上走 FTS5，短查询（中文两字词）退化为 LIKE。 */
-export function searchText(db: Db, rawQuery: string, limit: number): TextSearchHit[] {
+export function searchText(
+  db: Db,
+  rawQuery: string,
+  limit: number,
+  bookId: string | null = null,
+): TextSearchHit[] {
   const plan = planSearch(rawQuery)
   if (!plan) return []
   const query = cleanQuery(rawQuery)
+  const bookClause = bookId ? 'AND c.book_id = ?' : ''
+  const bookParams = bookId ? [bookId] : []
+  // 书内搜索按章节顺序读起来更顺；整库搜索仍按相关度排。
+  const order = bookId
+    ? 'ORDER BY c.chapter_index ASC, c.id ASC'
+    : plan.mode === 'match'
+      ? 'ORDER BY bm25(search_fts)'
+      : 'ORDER BY COALESCE(b.last_opened_at, b.added_at) DESC, c.chapter_index ASC'
 
   if (plan.mode === 'match') {
     const rows = db
@@ -87,11 +100,11 @@ export function searchText(db: Db, rawQuery: string, limit: number): TextSearchH
          FROM search_fts
          JOIN search_chunks c ON c.id = search_fts.rowid
          JOIN books b ON b.id = c.book_id
-         WHERE search_fts MATCH ? AND b.deleted_at IS NULL
-         ORDER BY bm25(search_fts)
+         WHERE search_fts MATCH ? AND b.deleted_at IS NULL ${bookClause}
+         ${order}
          LIMIT ?`,
       )
-      .all(plan.value, limit) as ChunkRow[]
+      .all(plan.value, ...bookParams, limit) as ChunkRow[]
     return rows.map((row) => toTextHit(row, query))
   }
 
@@ -102,11 +115,11 @@ export function searchText(db: Db, rawQuery: string, limit: number): TextSearchH
               c.href AS href, c.text AS text
        FROM search_chunks c
        JOIN books b ON b.id = c.book_id
-       WHERE c.text LIKE ? ESCAPE '\\' AND b.deleted_at IS NULL
-       ORDER BY COALESCE(b.last_opened_at, b.added_at) DESC, c.chapter_index ASC
+       WHERE c.text LIKE ? ESCAPE '\\' AND b.deleted_at IS NULL ${bookClause}
+       ${order}
        LIMIT ?`,
     )
-    .all(plan.value, limit) as ChunkRow[]
+    .all(plan.value, ...bookParams, limit) as ChunkRow[]
   return rows.map((row) => toTextHit(row, query))
 }
 
@@ -181,10 +194,16 @@ export function searchAnnotations(
 
 export function search(
   db: Db,
-  input: { q: string; scope: 'text' | 'annotations'; tagId: string | null; limit: number },
+  input: {
+    q: string
+    scope: 'text' | 'annotations'
+    tagId: string | null
+    bookId?: string | null
+    limit: number
+  },
 ): SearchHit[] {
   if (input.scope === 'annotations') {
     return searchAnnotations(db, input.q, input.limit, input.tagId)
   }
-  return searchText(db, input.q, input.limit)
+  return searchText(db, input.q, input.limit, input.bookId ?? null)
 }

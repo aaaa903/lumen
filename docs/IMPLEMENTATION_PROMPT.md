@@ -116,6 +116,17 @@ Lumen 是一个 Windows 桌面应用：本地优先的阅读、标注与知识�
 
 验收：PRD §8 场景 10–13 通过。
 
+### V1.1 增强（`0.3.0`）
+
+交付：
+
+- 书内搜索：`ReaderSearch` 面板 + `Ctrl+F`，`search:query` 支持 `bookId`，结果按章节顺序；点击用片段 + 命中词定位并临时高亮
+- 段落级索引：`chunkParagraphs` 按块级元素切块（上限 2000 字），一块一条 `search_chunks`；迁移 `003_search_chunks.sql` 清空旧索引并重建
+- 标注引用：`[[ann:<id>]]` 标记、`shared/references.ts` 解析、`note-markdown.ts` 渲染为站内链接；侧栏显示「引用 / 被引」，导出换成可读标签
+- 搜索跳转：跨书结果的 `quote` 带前后文，另带 `match`，`findQuoteWithin` 把范围缩到命中词
+
+验收：PRD §8 场景 14–15 通过。
+
 ## 交付方式
 
 - 每个里程碑：先给出改动文件清单，再改代码，最后给出验证命令与结果。
