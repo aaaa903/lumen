@@ -202,7 +202,8 @@ node scripts/copy-pdfjs-assets.mjs     # 单独补 public/pdfjs/（predev / preb
 | Pages 部署报 `Tag "v..." is not allowed to deploy to github-pages` | 仓库 Settings → Environments → github-pages 的部署分支策略只允许了 `main`：加一条 `v*`（tag）策略，或调 API `deployment-branch-policies` |
 | 发布流水线回写资产被拒（`fetch first`） | tag 构建默认是浅克隆，本地缺少远端 `main` 的提交：`actions/checkout` 必须设 `fetch-depth: 0`；若仍有并发推送，先 `git fetch origin main` 再推 |
 | 官网校验和与下载到的文件不一致 | `site/src/data/releases.json` 是本地构建的值：等发布工作流把 CI 构建的哈希回写到 `main`（提交信息 `chore: 回填 v* 资产信息`），再部署官网 |
-| 发布时 `main` 上出现一次失败的 Site 运行（`资产信息不完整`） | 先推 `main` 再推 tag 时，`site/**` 的版本条目还没有 `size` / `sha256`，这次 Site 必然失败；回填提交由 `GITHUB_TOKEN` 推送，不会再触发 Site。站点本身由 Release 流水线的部署作业在回填之后重建，属预期现象，不要为了消红点手改 |
+| 发布时 `main` 上出现一次失败的 Site 运行（`资产信息不完整`） | 先推 `main` 再推 tag 时，`site/**` 的版本条目还没有 `size` / `sha256`，这次 Site 必然失败。推荐只推 tag：发布作业回填资产后会自己把提交推到 `main`，不触发 Site。回填提交由 `GITHUB_TOKEN` 推送，属预期现象，不要为了消红点手改 |
+| `git push` 报 `Failed to connect to github.com:443` | 本机直连的 GitHub IP 可能不可达，而系统代理是通的：设置 `$env:HTTPS_PROXY='http://127.0.0.1:<代理端口>'` 后再推送；推送完只在当前会话生效，不要写进仓库配置 |
 | Smart App Control 拦截 `setup.exe` | 未签名；改用 `Lumen-<version>-portable.zip`。不要为此关闭 Smart App Control |
 | 网络日志出现外部请求 | 立即定位来源，补进白名单以外的拦截测试；不允许以「只是开发期」为由放行 |
 
