@@ -1,7 +1,7 @@
 # Lumen 技术设计
 
-版本：0.10（V1.1 已发布：v0.3.0 增加书内搜索、标注引用与段落级索引）
-对应 PRD：0.10
+版本：0.11（V1.2 已发布：v0.4.0 增加移出后的恢复与「已移除」分组）
+对应 PRD：0.11
 最后更新：2026-10-22
 
 本文描述**现状与下一步**。代码与本文冲突时，以代码为准并立即修正本文，不留「待更新」。
@@ -489,7 +489,7 @@ for each annotation (最多前 200 条):
 title: 书名
 author: 作者
 exported_at: 2026-10-21T12:00:00.000Z
-lumen_version: 0.3.0
+lumen_version: 0.4.0
 ---
 
 # 书名
@@ -699,7 +699,7 @@ git tag v* → .github/workflows/release.yml（windows-latest）
 
 | 常量 | 值 | 位置 |
 | --- | --- | --- |
-| 应用版本 | `0.3.0`（V1.1 已发布），版本节奏见 PRD §1.2 | `package.json` |
+| 应用版本 | `0.4.0`（V1.2 已发布），版本节奏见 PRD §1.2 | `package.json` |
 | 数据库 schema 版本 | `3` | `PRAGMA user_version` |
 | 单文件导入上限 | 200 MB | `electron/library/import.ts` |
 | 内存 EPUB 缓存数量 | 3 | `src/lib/convert/text-epub.ts` |
